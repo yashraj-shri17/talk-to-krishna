@@ -132,16 +132,16 @@ class GitaAPI:
         print("   Embeddings ready")
         logger.info(f"Loaded embeddings: {self.embeddings.shape}")
 
-        print("Krishna is preparing His divine wisdom...")
-        logger.info(f"Loading Semantic Model: {settings.SENTENCE_TRANSFORMER_MODEL}")
-        self.semantic_model = SentenceTransformer(settings.SENTENCE_TRANSFORMER_MODEL)
+        # NOTE: Semantic model is loaded LAZILY on first search to save memory
+        # This allows the server to start with minimal RAM usage
+        logger.info("✅ Data loaded. Semantic model will load on first query.")
         
         # NOTE: Cross-Encoder disabled because we have Hindi data but English Model.
         # The Multilingual Vector Model + Keyword search is much more accurate.
         self.cross_encoder = None 
         
-        print("\nHey! I have arrived.")
-        print("You may now ask your questions.\n")
+        print("\n✅ Krishna is ready!")
+        print("Semantic model will load on first question (saves memory).\n")
 
 
 
@@ -152,6 +152,15 @@ class GitaAPI:
                 self.llm_generator = LLMAnswerGenerator(api_key=self.groq_api_key)
             except Exception as e:
                 logger.warning(f"Groq init failed: {e}")
+    
+    def _ensure_semantic_model(self):
+        """Lazy load semantic model only when needed."""
+        if self.semantic_model is None:
+            logger.info(f"🔄 Loading Semantic Model: {settings.SENTENCE_TRANSFORMER_MODEL}")
+            print("Loading AI model (first time only)...")
+            self.semantic_model = SentenceTransformer(settings.SENTENCE_TRANSFORMER_MODEL)
+            logger.info("✅ Semantic model loaded")
+            print("✅ Model ready!\n")
 
     def _understand_query(self, query: str) -> Dict[str, str]:
         """
@@ -365,8 +374,14 @@ Return ONLY valid JSON. Be thorough with keywords - include synonyms and related
 
     def _semantic_search(self, query: str, top_k: int = 50) -> List[Tuple[int, float]]:
         """Deep semantic vector search."""
-        if not self.semantic_model or not self.embeddings is not None:
-             return []
+        if self.embeddings is None:
+            return []
+        
+        # Lazy load model on first use
+        self._ensure_semantic_model()
+        
+        if not self.semantic_model:
+            return []
              
         q_vec = self.semantic_model.encode([query])[0]
         sims = cosine_similarity([q_vec], self.embeddings)[0]

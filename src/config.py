@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     TFIDF_MODEL_FILE: str = "models/gita_tfidf.pkl"
     
     # Model configuration
-    SENTENCE_TRANSFORMER_MODEL: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    SENTENCE_TRANSFORMER_MODEL: str = "all-MiniLM-L6-v2"
     EMBEDDING_BATCH_SIZE: int = 32
     LLM_MODEL: str = "llama-3.1-8b-instant"
     

@@ -1,0 +1,35 @@
+# Core Dependencies - Compatible with existing environment
+numpy>=1.26.0,<2.2.0
+scikit-learn>=1.4.2
+sentence-transformers>=2.6.0
+rank-bm25>=0.2.2
+
+# LLM Integration
+groq>=0.4.0
+
+# Optional but recommended for production
+python-dotenv>=1.0.0
+pydantic>=2.9
+pydantic-settings>=2.4.0
+
+# Logging and monitoring
+colorlog>=6.8.0
+
+# Testing (optional)
+pytest>=7.4.3
+pytest-cov>=4.1.0
+
+# Code quality (optional)
+black>=23.12.1
+flake8>=7.0.0
+mypy>=1.8.0
+# Web API Dependencies
+flask>=3.0.0
+flask-cors>=4.0.0
+edge-tts>=6.1.9
+
+# Production WSGI Server
+gunicorn>=21.2.0
+
+# Database (PostgreSQL for production)
+psycopg2-binary>=2.9.9

@@ -1,0 +1,28 @@
+services:
+  # Backend API Service
+  - type: web
+    name: talk-to-krishna-api
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn website.api_server:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.18
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: talk-to-krishna-db
+          property: connectionString
+    healthCheckPath: /
+
+  # PostgreSQL Database
+  - type: pserv
+    name: talk-to-krishna-db
+    env: docker
+    plan: free
+    region: oregon

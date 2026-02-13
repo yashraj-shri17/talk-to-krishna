@@ -102,18 +102,6 @@ gita_api = GitaAPI()
 gita_api._load_resources()
 print("API Ready!\n")
 
-# Health check endpoint for Render
-@app.route('/', methods=['GET'])
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint for deployment platforms."""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'Talk to Krishna API',
-        'version': '2.0.0'
-    }), 200
-
-
 @app.route('/api/ask', methods=['POST'])
 def ask_question():
     """
@@ -393,7 +381,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'Talk to Krishna API',
-        'version': '1.0'
+        'version': '2.0.0'
     })
 
 @app.route('/')

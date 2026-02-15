@@ -22,12 +22,14 @@ function VoiceChat() {
     const [hasStarted, setHasStarted] = useState(false);
     const recognitionRef = useRef(null);
     const currentUtteranceRef = useRef(null);
+    const isCancelledRef = useRef(false);
 
     // Generate Session ID once per mount
     const [sessionId] = useState(() => 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9));
 
     const stopAudio = useCallback(() => {
         console.log("Stopping audio...");
+        isCancelledRef.current = true; // Signal cancellation
         window.speechSynthesis.cancel();
         setIsSpeaking(false);
     }, []);
@@ -38,6 +40,9 @@ function VoiceChat() {
             return;
         }
 
+        // Reset cancellation flag
+        isCancelledRef.current = false;
+
         // Cancel any ongoing speech explicitly
         window.speechSynthesis.cancel();
         setIsSpeaking(true);
@@ -47,6 +52,13 @@ function VoiceChat() {
         let currentChunkIndex = 0;
 
         const speakNextChunk = () => {
+            // Check for cancellation signal
+            if (isCancelledRef.current) {
+                console.log("Audio stopped by user.");
+                setIsSpeaking(false);
+                return;
+            }
+
             if (currentChunkIndex >= chunks.length) {
                 setIsSpeaking(false);
                 currentUtteranceRef.current = null;
@@ -62,14 +74,13 @@ function VoiceChat() {
 
             const utterance = new SpeechSynthesisUtterance(chunkText);
 
-            // Store reference to prevent garbage collection
+            // Store reference
             currentUtteranceRef.current = utterance;
 
             // Voice selection logic
             const hasDevanagari = /[\u0900-\u097F]/.test(chunkText);
             let voices = window.speechSynthesis.getVoices();
 
-            // Retry voices if empty
             if (voices.length === 0) {
                 voices = window.speechSynthesis.getVoices();
             }
@@ -82,7 +93,6 @@ function VoiceChat() {
             };
 
             let preferredVoice = null;
-
             if (hasDevanagari) {
                 preferredVoice = voices.find(voice => voice.lang === 'sa-IN');
                 if (!preferredVoice) preferredVoice = findVoice('hi-IN', 'male');
@@ -107,15 +117,20 @@ function VoiceChat() {
             utterance.pitch = 0.8;
 
             utterance.onend = () => {
-                currentChunkIndex++;
-                speakNextChunk();
+                // Only proceed if not cancelled
+                if (!isCancelledRef.current) {
+                    currentChunkIndex++;
+                    speakNextChunk();
+                }
             };
 
             utterance.onerror = (event) => {
                 console.error('Speech synthesis error', event);
-                // On error, try to skip to next chunk instead of dying completely
-                currentChunkIndex++;
-                speakNextChunk();
+                // On error, if not cancelled, try to skip
+                if (!isCancelledRef.current) {
+                    currentChunkIndex++;
+                    speakNextChunk();
+                }
             };
 
             window.speechSynthesis.speak(utterance);
@@ -125,7 +140,6 @@ function VoiceChat() {
         if (window.speechSynthesis.getVoices().length === 0) {
             window.speechSynthesis.onvoiceschanged = () => {
                 speakNextChunk();
-                // Remove listener to avoid multi-firing
                 window.speechSynthesis.onvoiceschanged = null;
             };
         } else {

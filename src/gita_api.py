@@ -388,8 +388,36 @@ Return ONLY valid JSON. Be thorough with keywords - include synonyms and related
         # Since we only send one query, we get one batch, take the first item
         # The result is a numpy array of embeddings
         embedding_gen = self.semantic_model.embed([query])
-        q_vec = list(embedding_gen)[0][0]  # First batch, first item in batch
-        sims = cosine_similarity([q_vec], self.embeddings)[0]
+        # Force list conversion to inspect
+        try:
+            batches = list(embedding_gen)
+            if not batches or len(batches[0]) == 0:
+                logger.error("FastEmbed returned no embeddings")
+                return []
+            
+            q_vec = batches[0][0]
+            
+            # Ensure q_vec is 2D (1, dim) for sklearn
+            if hasattr(q_vec, 'reshape'):
+                q_vec = q_vec.reshape(1, -1)
+            else:
+                q_vec = np.array([q_vec])
+
+            # Ensure embeddings is 2D
+            if hasattr(self.embeddings, 'ndim') and self.embeddings.ndim == 1:
+                # If embeddings got flattened, reshape it back? Or assume it's one sample?
+                # Usually embeddings should be (N, dim). If it's 1D, something is wrong.
+                # Attempt to use as-is but warn
+                logger.warning(f"Embeddings array is 1D: {self.embeddings.shape}. Reshaping to (1, -1) if possible.")
+                self.embeddings = self.embeddings.reshape(1, -1)
+            
+            if len(self.embeddings) == 0:
+                 return []
+
+            sims = cosine_similarity(q_vec, self.embeddings)[0]
+        except Exception as e:
+            logger.error(f"Semantic search failed: {e}")
+            return []
         # Get indices
         idxs = np.argsort(sims)[::-1][:top_k]
         return [(int(i), float(sims[i])) for i in idxs]

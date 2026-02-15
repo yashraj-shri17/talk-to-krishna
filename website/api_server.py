@@ -135,6 +135,8 @@ def ask_question():
         include_audio = data.get('include_audio', False)
         user_id = data.get('user_id')  # Optional: for logged-in users
         
+        session_id = data.get('session_id')  # New: Session ID for context filtering
+        
         if not question:
             return jsonify({
                 'error': 'Question cannot be empty',
@@ -217,6 +219,7 @@ def ask_question():
         print(f"Words: {q_words}")
         print(f"Is greeting: {is_greeting}")
         print(f"User ID: {user_id}")
+        print(f"Session ID: {session_id}")
         print(f"{'='*70}\n")
 
         if is_greeting:
@@ -231,7 +234,7 @@ def ask_question():
             
             # Save greeting conversation if user is logged in
             if user_id:
-                save_conversation(user_id, question, greeting_text, [])
+                save_conversation(user_id, question, greeting_text, [], session_id=session_id)
             
             # Generate audio if requested
             if include_audio:
@@ -244,8 +247,9 @@ def ask_question():
         # Get user's conversation history if logged in
         conversation_history = []
         if user_id:
-            conversation_history = get_user_history(user_id, limit=5)
-            print(f"Retrieved {len(conversation_history)} previous conversations for user {user_id}")
+            # Filter history by session_id if provided
+            conversation_history = get_user_history(user_id, session_id=session_id, limit=5)
+            print(f"Retrieved {len(conversation_history)} previous conversations for user {user_id} (Session: {session_id})")
         
         # Get answer from GitaAPI with conversation context
         import time
@@ -258,7 +262,7 @@ def ask_question():
         
         # Save conversation if user is logged in
         if user_id and answer_text:
-            save_conversation(user_id, question, answer_text, shlokas)
+            save_conversation(user_id, question, answer_text, shlokas, session_id=session_id)
             print(f"Saved conversation for user {user_id}")
         
         # Format response
@@ -483,6 +487,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
+            session_id TEXT,
             question TEXT NOT NULL,
             answer TEXT NOT NULL,
             shlokas TEXT,
@@ -490,6 +495,13 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+    
+    # Check if session_id column exists (migration for existing DB)
+    try:
+        c.execute('SELECT session_id FROM conversations LIMIT 1')
+    except sqlite3.OperationalError:
+        print("Migrating DB: Adding session_id column...")
+        c.execute('ALTER TABLE conversations ADD COLUMN session_id TEXT')
     
     # Password reset tokens table
     c.execute('''
@@ -507,17 +519,30 @@ def init_db():
     conn.commit()
     conn.close()
 
-def get_user_history(user_id, limit=5):
-    """Get recent conversation history for a user."""
+def get_user_history(user_id, session_id=None, limit=5):
+    """Get recent conversation history for a user, optionally filtered by session."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''
-        SELECT question, answer, shlokas, timestamp 
-        FROM conversations 
-        WHERE user_id = ? 
-        ORDER BY timestamp DESC 
-        LIMIT ?
-    ''', (user_id, limit))
+    
+    if session_id:
+        # If session_id provided, only get history for THAT session
+        c.execute('''
+            SELECT question, answer, shlokas, timestamp 
+            FROM conversations 
+            WHERE user_id = ? AND session_id = ?
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        ''', (user_id, session_id, limit))
+    else:
+        # Fallback to global history (or maybe just empty if we want strict sessions?)
+        c.execute('''
+            SELECT question, answer, shlokas, timestamp 
+            FROM conversations 
+            WHERE user_id = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        ''', (user_id, limit))
+        
     history = c.fetchall()
     conn.close()
     
@@ -531,15 +556,15 @@ def get_user_history(user_id, limit=5):
         })
     return formatted_history
 
-def save_conversation(user_id, question, answer, shlokas):
+def save_conversation(user_id, question, answer, shlokas, session_id=None):
     """Save a conversation to the database."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     shlokas_json = json.dumps(shlokas) if shlokas else None
     c.execute('''
-        INSERT INTO conversations (user_id, question, answer, shlokas)
-        VALUES (?, ?, ?, ?)
-    ''', (user_id, question, answer, shlokas_json))
+        INSERT INTO conversations (user_id, session_id, question, answer, shlokas)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (user_id, session_id, question, answer, shlokas_json))
     conn.commit()
     conn.close()
 

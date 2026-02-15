@@ -23,7 +23,11 @@ function VoiceChat() {
     const recognitionRef = useRef(null);
     const currentUtteranceRef = useRef(null);
 
+    // Generate Session ID once per mount
+    const [sessionId] = useState(() => 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9));
+
     const stopAudio = useCallback(() => {
+        console.log("Stopping audio...");
         window.speechSynthesis.cancel();
         setIsSpeaking(false);
     }, []);
@@ -34,14 +38,12 @@ function VoiceChat() {
             return;
         }
 
-        // Cancel any ongoing speech
+        // Cancel any ongoing speech explicitly
         window.speechSynthesis.cancel();
         setIsSpeaking(true);
 
         // Split text into manageable chunks (sentences)
-        // This regex splits by common sentence terminators but keeps them
         const chunks = text.match(/[^.!?|]+[.!?|]*/g) || [text];
-
         let currentChunkIndex = 0;
 
         const speakNextChunk = () => {
@@ -158,6 +160,7 @@ function VoiceChat() {
             const response = await axios.post(API_URL, {
                 question: text,
                 include_audio: false,
+                session_id: sessionId, // NEW: Pass session ID for fresh context
                 user_id: user?.id  // Send user ID if logged in
             });
 

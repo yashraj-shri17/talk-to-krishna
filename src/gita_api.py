@@ -403,14 +403,23 @@ Return ONLY valid JSON. Be thorough with keywords - include synonyms and related
             else:
                 q_vec = np.array([q_vec])
 
-            # Ensure embeddings is 2D
+            # Ensure embeddings is 2D (N, dim)
+            # If embeddings is 1D (flattened), means N*dim elements.
+            # We need to reshape it to (-1, dim)
             if hasattr(self.embeddings, 'ndim') and self.embeddings.ndim == 1:
                 # If embeddings got flattened, reshape it back? Or assume it's one sample?
-                # Usually embeddings should be (N, dim). If it's 1D, something is wrong.
-                # Attempt to use as-is but warn
-                logger.warning(f"Embeddings array is 1D: {self.embeddings.shape}. Reshaping to (1, -1) if possible.")
-                self.embeddings = self.embeddings.reshape(1, -1)
-            
+                if self.embeddings.shape[0] > 0:
+                     # Calculate assuming standard dimension
+                     # FastEmbed (bge-small-en-v1.5) dim = 384
+                     dim = 384
+                     if self.embeddings.shape[0] % dim == 0:
+                         logger.warning(f"Embeddings array is 1D: {self.embeddings.shape}. Reshaping to (-1, {dim}).")
+                         self.embeddings = self.embeddings.reshape(-1, dim)
+                     else:
+                         # Fallback or error?
+                         logger.error(f"Embeddings 1D shape {self.embeddings.shape} not divisible by {dim}. Cannot reshape.")
+                         return []
+
             if len(self.embeddings) == 0:
                  return []
 

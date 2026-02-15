@@ -7,7 +7,8 @@ import pickle
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Literal
-from sentence_transformers import SentenceTransformer, CrossEncoder
+from fastembed import TextEmbedding
+# from sentence_transformers import SentenceTransformer, CrossEncoder # REMOVED for memory efficiency
 from sklearn.metrics.pairwise import cosine_similarity
 from groq import Groq
 
@@ -158,7 +159,7 @@ class GitaAPI:
         if self.semantic_model is None:
             logger.info(f"🔄 Loading Semantic Model: {settings.SENTENCE_TRANSFORMER_MODEL}")
             print("Loading AI model (first time only)...")
-            self.semantic_model = SentenceTransformer(settings.SENTENCE_TRANSFORMER_MODEL)
+            self.semantic_model = TextEmbedding(model_name=settings.SENTENCE_TRANSFORMER_MODEL)
             logger.info("✅ Semantic model loaded")
             print("✅ Model ready!\n")
 
@@ -383,7 +384,11 @@ Return ONLY valid JSON. Be thorough with keywords - include synonyms and related
         if not self.semantic_model:
             return []
              
-        q_vec = self.semantic_model.encode([query])[0]
+        # FastEmbed returns a generator of batches, so we list() it to get all batches
+        # Since we only send one query, we get one batch, take the first item
+        # The result is a numpy array of embeddings
+        embedding_gen = self.semantic_model.embed([query])
+        q_vec = list(embedding_gen)[0][0]  # First batch, first item in batch
         sims = cosine_similarity([q_vec], self.embeddings)[0]
         # Get indices
         idxs = np.argsort(sims)[::-1][:top_k]

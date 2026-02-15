@@ -9,7 +9,8 @@ import pickle
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
+# from sentence_transformers import SentenceTransformer
 
 from src.config import settings
 from src.logger import setup_logger
@@ -38,7 +39,7 @@ class EmbeddingGenerator:
         self.model_name = model_name or settings.SENTENCE_TRANSFORMER_MODEL
         self.input_file = input_file or settings.gita_emotions_path
         self.output_file = output_file or settings.embeddings_path
-        self.model: Optional[SentenceTransformer] = None
+        self.model: Optional[TextEmbedding] = None
         
     def load_data(self) -> Dict[str, Any]:
         """
@@ -68,7 +69,7 @@ class EmbeddingGenerator:
         except Exception as e:
             raise EmbeddingGenerationError(f"Error loading data: {e}")
     
-    def load_model(self) -> SentenceTransformer:
+    def load_model(self) -> TextEmbedding:
         """
         Load the sentence transformer model.
         
@@ -78,7 +79,7 @@ class EmbeddingGenerator:
         if self.model is None:
             logger.info(f"Loading Sentence Transformer model: {self.model_name}")
             try:
-                self.model = SentenceTransformer(self.model_name)
+                self.model = TextEmbedding(model_name=self.model_name)
                 logger.info("Model loaded successfully")
             except Exception as e:
                 raise EmbeddingGenerationError(f"Failed to load model: {e}")
@@ -156,12 +157,12 @@ class EmbeddingGenerator:
         logger.info(f"Generating embeddings for {len(texts)} texts...")
         
         try:
-            embeddings = model.encode(
-                texts,
-                batch_size=batch_size,
-                show_progress_bar=True,
-                convert_to_numpy=True
-            )
+            # FastEmbed handles batching internally, but we can specify batch_size if needed
+            # It returns a generator of numpy arrays (batches)
+            embedding_gen = model.embed(texts, batch_size=batch_size)
+            
+            # Combine all batches into a single numpy array
+            embeddings = np.concatenate(list(embedding_gen), axis=0)
             logger.info("Embeddings generated successfully")
             return embeddings
         except Exception as e:

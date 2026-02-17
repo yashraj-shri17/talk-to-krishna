@@ -4,7 +4,7 @@ import MessageHistory from './MessageHistory';
 import VoiceControls from './VoiceControls';
 import './VoiceChat.css';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { API_ENDPOINTS } from '../config/api';
 
@@ -12,6 +12,7 @@ const API_URL = API_ENDPOINTS.ASK;
 
 function VoiceChat() {
     const navigate = useNavigate();
+    const location = useLocation();
     const { user } = useAuth();
     const [messages, setMessages] = useState([]);
     const [isListening, setIsListening] = useState(false);
@@ -259,6 +260,27 @@ function VoiceChat() {
         return () => clearTimeout(timer);
     }, [handleVoiceInput, speakText]);
 
+    // Cleanup audio when component unmounts or route changes
+    useEffect(() => {
+        return () => {
+            console.log("Component unmounting - stopping all audio");
+            isCancelledRef.current = true;
+            window.speechSynthesis.cancel();
+            if (recognitionRef.current && isListening) {
+                recognitionRef.current.stop();
+            }
+        };
+    }, [isListening]);
+
+    // Stop audio when location/route changes
+    useEffect(() => {
+        return () => {
+            console.log("Route changing - stopping audio");
+            isCancelledRef.current = true;
+            window.speechSynthesis.cancel();
+        };
+    }, [location]);
+
     const toggleListening = () => {
         if (!recognitionRef.current) {
             alert('Voice recognition not supported. Please use Chrome or Edge.');
@@ -300,7 +322,11 @@ function VoiceChat() {
         <div className="voice-chat-container">
             {/* Header */}
             <header className="app-header">
-                <button className="icon-button back-button" onClick={() => navigate('/')}>
+                <button className="icon-button back-button" onClick={() => {
+                    // Stop audio when navigating back
+                    stopAudio();
+                    navigate('/');
+                }}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
@@ -313,7 +339,13 @@ function VoiceChat() {
 
                 <button
                     className="icon-button history-toggle"
-                    onClick={() => setShowHistory(!showHistory)}
+                    onClick={() => {
+                        // Stop audio when toggling history
+                        if (isSpeaking) {
+                            stopAudio();
+                        }
+                        setShowHistory(!showHistory);
+                    }}
                     title="Toggle history"
                 >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -379,7 +411,13 @@ function VoiceChat() {
             <MessageHistory
                 messages={messages}
                 isOpen={showHistory}
-                onClose={() => setShowHistory(false)}
+                onClose={() => {
+                    // Stop audio when closing history
+                    if (isSpeaking) {
+                        stopAudio();
+                    }
+                    setShowHistory(false);
+                }}
                 onClearHistory={clearHistory}
             />
         </div>

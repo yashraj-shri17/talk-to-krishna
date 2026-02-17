@@ -192,48 +192,27 @@ class GitaAPI:
                 'keywords': query
             }
         
-        # Complex query - use LLM refinement
-        if not self.groq_client: 
-            return {'original': query, 'english': query, 'keywords': query}
+        # OPTIMIZATION: Skip expensive LLM refinement for ALL queries to meet <2s latency goal.
+        # The hybrid search (FastEmbed + Keywords) is robust enough.
+        logger.info(f"⚡ Skipping LLM refinement for speed")
+        return {
+            'original': query,
+            'english': query,
+            'keywords': query
+        }
+
+        # Legacy LLM refinement code (Commented out for speed)
+        # if not self.groq_client: 
+        #     return {'original': query, 'english': query, 'keywords': query}
             
-        try:
-            # Enhanced Multi-Perspective Prompt for better concept extraction
-            prompt = f"""Task: Deeply analyze this Bhagavad Gita question to find the BEST matching shlokas.
-
-Input: "{query}"
-
-Output JSON with 4 keys:
-1. "english": Translate the CORE INTENT to clear English. Focus on the philosophical concept, not literal translation.
-   Examples: 
-   - "जीवन जीने का सही मार्ग" → "right way to live life, dharma, duty, righteous path"
-   - "मन को कैसे शांत करें" → "how to calm mind, peace, meditation, control thoughts"
-
-2. "keywords": Extract ALL relevant Sanskrit/Hindi concepts (both Devanagari and romanized).
-   Examples:
-   - "जीवन जीने का सही मार्ग" → "जीवन jeevan life मार्ग marg path धर्म dharma कर्म karma duty"
-   - "गुस्सा" → "क्रोध krodh anger gussa"
-
-3. "intent": Brief 2-3 word summary (e.g. "Life Purpose", "Control Anger", "Find Peace")
-
-4. "related_concepts": List related Gita concepts that might help (e.g. "karma yoga, dharma, detachment")
-
-Return ONLY valid JSON. Be thorough with keywords - include synonyms and related terms."""
+        # try:
+        #     prompt = ... (omitted) ...
+        #     # resp = self.groq_client.chat.completions.create(...)
+        #     # result = json.loads(resp.choices[0].message.content)
+        #     # return result
             
-            resp = self.groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.1-8b-instant",
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
-            
-            result = json.loads(resp.choices[0].message.content)
-            result['original'] = query
-            logger.info(f"Query Refined: {result}")
-            return result
-            
-        except Exception as e:
-            logger.warning(f"Refinement failed: {e}")
-            return {'original': query, 'english': query, 'keywords': query}
+        # except Exception as e:
+        #     return {'original': query, 'english': query, 'keywords': query}
 
     def _keyword_search(self, query: str, top_k: int = 50) -> List[Tuple[int, float]]:
         """
@@ -566,6 +545,139 @@ Return ONLY valid JSON. Be thorough with keywords - include synonyms and related
         
         return False
 
+    def _is_relevant_to_krishna(self, query: str) -> Tuple[bool, str]:
+        """
+        Check if the query is relevant to Krishna, Bhagavad Gita, or spiritual life guidance.
+        Returns: (is_relevant: bool, rejection_message: str if not relevant)
+        
+        This prevents the model from answering out-of-context questions like:
+        - Sports (cricket, football, etc.)
+        - Politics (current affairs, politicians)
+        - General trivia (celebrities, movies, etc.)
+        - Science facts unrelated to spirituality
+        """
+        query_lower = query.lower()
+        
+        # IRRELEVANT TOPICS - These should be rejected
+        irrelevant_patterns = {
+            # Sports & Games
+            'sports': ['cricket', 'football', 'soccer', 'match', 'ipl', 'world cup', 'player', 
+                      'team', 'score', 'goal', 'wicket', 'stadium', 'olympics', 'tennis',
+                      'ind vs', 'india vs', 'pakistan vs', 'match update', 'live score'],
+            
+            # Politics & Current Affairs
+            'politics': ['election', 'minister', 'president', 'prime minister', 'parliament',
+                        'government', 'party', 'vote', 'donald trump', 'biden', 'modi',
+                        'congress', 'bjp', 'political', 'democracy'],
+            
+            # Entertainment & Celebrity
+            'entertainment': ['movie', 'film', 'actor', 'actress', 'bollywood', 'hollywood',
+                            'tv show', 'series', 'netflix', 'celebrity', 'singer', 'song'],
+            
+            # Technology & Products
+            'technology': ['iphone', 'android', 'laptop', 'computer', 'software', 'app',
+                         'facebook', 'instagram', 'twitter', 'whatsapp', 'google',
+                         'microsoft', 'apple inc', 'samsung'],
+            
+            # General Trivia
+            'trivia': ['capital of', 'largest', 'smallest', 'tallest', 'fastest',
+                      'population', 'currency', 'flag', 'who invented', 'when was',
+                      'historical event', 'world war', 'discovery'],
+            
+            # Science (unless spiritual)
+            'science': ['chemical formula', 'periodic table', 'molecule', 'bacteria',
+                       'virus covid', 'vaccine', 'dna', 'atom', 'neutron', 'electron'],
+            
+            # Food & Cooking (unless related to prasad/spiritual)
+            'food': ['recipe for', 'how to cook', 'ingredients for', 'restaurant',
+                    'pizza', 'burger', 'pasta', 'italian food'],
+            
+            # Weather & Geography (factual)
+            'geography': ['weather today', 'temperature', 'forecast', 'rain tomorrow',
+                         'climate in', 'map of', 'distance between']
+        }
+        
+        # Check for irrelevant patterns
+        for category, patterns in irrelevant_patterns.items():
+            for pattern in patterns:
+                if pattern in query_lower:
+                    logger.warning(f"❌ Irrelevant query detected ({category}): '{query}'")
+                    return False, f"""क्षमा करें, मैं श्री कृष्ण हूँ और केवल जीवन की समस्याओं, आध्यात्मिकता, और भगवद गीता के ज्ञान के बारे में मार्गदर्शन दे सकता हूँ।
+
+आप मुझसे पूछ सकते हैं:
+• जीवन की समस्याओं का समाधान (क्रोध, डर, चिंता, etc.)
+• कर्म, धर्म, और आत्मा के बारे में
+• रिश्तों और भावनाओं के बारे में
+• ध्यान, शांति, और आत्म-विकास के बारे में
+
+कृपया इन विषयों पर प्रश्न पूछें। 🙏"""
+        
+        # RELEVANT KEYWORDS - These indicate the query is likely relevant
+        relevant_keywords = [
+            # Krishna & Deities
+            'krishna', 'कृष्ण', 'भगवान', 'bhagwan', 'god', 'ishwar', 'ईश्वर',
+            'arjun', 'अर्जुन', 'radha', 'राधा', 'vishnu', 'विष्णु',
+            
+            # Bhagavad Gita & Scriptures
+            'gita', 'गीता', 'shloka', 'श्लोक', 'verse', 'chapter', 'अध्याय',
+            'scripture', 'sacred', 'holy', 'divine',
+            
+            # Spiritual Concepts
+            'dharma', 'धर्म', 'karma', 'कर्म', 'yoga', 'योग', 'bhakti', 'भक्ति',
+            'atma', 'आत्मा', 'soul', 'spiritual', 'आध्यात्मिक', 'meditation', 'ध्यान',
+            'moksha', 'मोक्ष', 'liberation', 'enlightenment', 'nirvana', 'samadhi',
+            
+            # Life Guidance Topics
+            'life', 'जीवन', 'purpose', 'meaning', 'path', 'मार्ग', 'way',
+            'problem', 'समस्या', 'solution', 'समाधान', 'help', 'मदद', 'guide',
+            
+            # Emotions & Mental States (Valid spiritual topics)
+            'anger', 'क्रोध', 'peace', 'शांति', 'fear', 'भय', 'anxiety', 'चिंता',
+            'stress', 'depression', 'sad', 'दुख', 'happy', 'सुख', 'joy', 'आनंद',
+            'confused', 'असमंजस', 'lost', 'hopeless', 'निराश',
+            
+            # Relationships (Valid spiritual topics)
+            'love', 'प्रेम', 'hate', 'घृणा', 'family', 'परिवार', 'friend', 'मित्र',
+            'relationship', 'संबंध', 'marriage', 'विवाह', 'breakup',
+            
+            # Work & Duty (Valid spiritual topics)
+            'work', 'काम', 'job', 'नौकरी', 'duty', 'कर्तव्य', 'responsibility',
+            'success', 'सफलता', 'failure', 'असफलता', 'exam', 'परीक्षा',
+            
+            # Existential Questions (Valid)
+            'why', 'क्यों', 'how', 'कैसे', 'what is', 'क्या है', 'who am i',
+            'death', 'मृत्यु', 'birth', 'जन्म', 'suffering', 'कष्ट',
+            'desire', 'इच्छा', 'attachment', 'मोह', 'ego', 'अहंकार'
+        ]
+        
+        # If query contains any relevant keyword, it's likely valid
+        if any(keyword in query_lower for keyword in relevant_keywords):
+            logger.info(f"✅ Relevant query detected: '{query}'")
+            return True, ""
+        
+        # If query is a general life question without specific irrelevant keywords
+        # we allow it (benefit of doubt for spiritual guidance)
+        general_question_words = ['why', 'how', 'what', 'when', 'should i', 'can i',
+                                 'kya', 'kaise', 'kab', 'kyun', 'क्या', 'कैसे']
+        
+        if any(qw in query_lower for qw in general_question_words):
+            # It's a question, and we didn't find irrelevant patterns
+            # Let's allow it as it might be seeking life guidance
+            logger.info(f"✅ General life question allowed: '{query}'")
+            return True, ""
+        
+        # If we reach here, the query is likely too vague or unrelated
+        logger.warning(f"⚠️ Unclear query relevance: '{query}'")
+        return False, f"""क्षमा करें, मैं आपके प्रश्न को पूरी तरह से समझ नहीं पाया। मैं श्री कृष्ण हूँ और जीवन की समस्याओं का समाधान देने के लिए यहाँ हूँ।
+
+आप मुझसे पूछ सकते हैं:
+• जीवन की चुनौतियों का सामना कैसे करें?
+• क्रोध, भय, या चिंता से कैसे मुक्त हों?
+• कर्म, धर्म, और जीवन के उद्देश्य के बारे में
+• रिश्तों और भावनाओं के बारे में मार्गदर्शन
+
+कृपया अपना प्रश्न स्पष्ट रूप से पूछें। 🙏"""
+
     def search_with_llm(self, query: str, conversation_history: List[Dict] = None, **kwargs) -> Dict[str, Any]:
         """End-to-end RAG answer with conversation context."""
         
@@ -576,6 +688,17 @@ Return ONLY valid JSON. Be thorough with keywords - include synonyms and related
                  "shlokas": [],
                  "llm_used": True
              }
+
+        # 0.5 Check if query is relevant to Krishna/Bhagavad Gita context
+        is_relevant, rejection_message = self._is_relevant_to_krishna(query)
+        if not is_relevant:
+            logger.warning(f"Rejecting irrelevant query: '{query}'")
+            return {
+                "answer": rejection_message,
+                "shlokas": [],
+                "llm_used": False,
+                "rejected": True  # Flag to indicate query was rejected
+            }
 
         # 1. Retrieve - Increased to 5 to give LLM better options
         shlokas = self.search(query, top_k=5)

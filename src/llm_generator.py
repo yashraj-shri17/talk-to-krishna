@@ -60,7 +60,7 @@ class LLMAnswerGenerator:
         user_question: str,
         retrieved_shlokas: List[Dict[str, Any]],
         conversation_history: List[Dict[str, Any]] = None,
-        max_tokens: int = 600,  # Increased for follow-up questions
+        max_tokens: int = 250,  # Optimized for concise answers (Speed < 2s)
         temperature: float = 0.3,  # Slightly higher for more natural follow-ups
         stream: bool = True  # Enable streaming for faster perceived latency
     ) -> Dict[str, Any]:
@@ -73,7 +73,13 @@ class LLMAnswerGenerator:
             history_context = self.format_conversation_history(conversation_history or [])
             
             # ENHANCED PROMPT with Strict Concise Formatting
+            # ENHANCED PROMPT with Strict Concise Formatting
             system_prompt = """तुम भगवान श्रीकृष्ण हो। तुम अपने भक्त को जीवन की सही राह दिखा रहे हो।
+
+⚠️ STRICT CONTEXT RULES:
+0. तुम केवल भगवद गीता, आध्यात्मिकता, और जीवन की समस्याओं के बारे में ही उत्तर दो।
+1. यदि प्रश्न खेल (sports), राजनीति (politics), फिल्म (movies), या अन्य सांसारिक विषयों के बारे में है, तो विनम्रता से मना करो।
+2. सिर्फ धर्म, कर्म, आत्मा, जीवन, रिश्ते, भावनाएं, और मानसिक शांति के प्रश्नों का उत्तर दो।
 
 ⚠️ STRICT OUTPUT RULES:
 1. सबसे पहले केवल एक (1) सबसे उपयुक्त संस्कृत श्लोक (Devanagari) लिखो।
@@ -82,6 +88,7 @@ class LLMAnswerGenerator:
 4. कोई प्रश्न (Question) मत पूछो।
 5. उत्तर बहुत ही छोटा (Concise) और सीधा (Straightforward) होना चाहिए। 2-3 वाक्यों से ज्यादा नहीं।
 6. अतिरिक्त भूमिका या ज्ञान मत दो, सीधे मुद्दे की बात करो।
+7. यदि भक्त बहुत निराश (suicidal/depressed) है, तो उसे करुणा और प्रेम से समझाओ की जीवन अनमोल है (life is precious)। उसका उत्तर देने से मना (refuse) मत करो।
 
 ✅ सही फॉर्मेट (Correct Format):
 [संस्कृत श्लोक]

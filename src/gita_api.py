@@ -3,6 +3,7 @@ Unified Production-Grade API for Talk to Krishna.
 Implements multi-stage retrieval RAG system.
 """
 import json
+import re
 import pickle
 import numpy as np
 from pathlib import Path
@@ -165,54 +166,58 @@ class GitaAPI:
 
     def _understand_query(self, query: str) -> Dict[str, str]:
         """
-        Refine the query into multiple perspectives for maximum coverage.
-        Returns: { 'original': ..., 'english': ..., 'keywords': ... }
-        
-        OPTIMIZATION: Skip expensive LLM call for simple queries.
-        """
-        # Quick check: Is this a simple query that doesn't need LLM refinement?
-        query_lower = query.lower()
-        simple_patterns = [
-            'anger', 'peace', 'fear', 'karma', 'dharma', 'life', 'death',
-            'क्रोध', 'शांति', 'भय', 'कर्म', 'धर्म', 'जीवन', 'मृत्यु',
-            'love', 'hate', 'work', 'duty', 'meditation',
-            'प्रेम', 'घृणा', 'काम', 'कर्तव्य', 'ध्यान'
-        ]
-        
-        # If query is short and contains common keywords, skip LLM
-        word_count = len(query.split())
-        has_simple_keyword = any(pattern in query_lower for pattern in simple_patterns)
-        
-        if word_count <= 8 and has_simple_keyword:
-            # Simple query - skip LLM, use direct mapping
-            logger.info(f"⚡ Simple query detected, skipping LLM refinement")
-            return {
-                'original': query,
-                'english': query,
-                'keywords': query
-            }
-        
-        # OPTIMIZATION: Skip expensive LLM refinement for ALL queries to meet <2s latency goal.
-        # The hybrid search (FastEmbed + Keywords) is robust enough.
-        logger.info(f"⚡ Skipping LLM refinement for speed")
-        return {
-            'original': query,
-            'english': query,
-            'keywords': query
-        }
+        Translate Hindi/Hinglish query to English for semantic search.
 
-        # Legacy LLM refinement code (Commented out for speed)
-        # if not self.groq_client: 
-        #     return {'original': query, 'english': query, 'keywords': query}
-            
-        # try:
-        #     prompt = ... (omitted) ...
-        #     # resp = self.groq_client.chat.completions.create(...)
-        #     # result = json.loads(resp.choices[0].message.content)
-        #     # return result
-            
-        # except Exception as e:
-        #     return {'original': query, 'english': query, 'keywords': query}
+        The embedding model (BAAI/bge-small-en-v1.5) is English-only.
+        Passing a Hindi query gives garbage similarity scores.
+        This method uses a fast Groq call to translate before embedding.
+
+        Returns: { 'original': ..., 'english': ..., 'keywords': ... }
+        """
+        if not self.groq_client:
+            # No Groq client — fall back to raw query (degraded quality)
+            logger.warning("No Groq client for translation, using raw query")
+            return {'original': query, 'english': query, 'keywords': query}
+
+        try:
+            prompt = f"""Translate this Hindi/Hinglish message to English. Also extract 3-5 philosophical keywords.
+
+Message: "{query}"
+
+Respond in this exact JSON format (no extra text):
+{{"english": "<English translation>", "keywords": "<space-separated philosophical keywords>"}}
+
+Examples:
+- "मुझे बहुत गुस्सा आता है" → {{"english": "I get very angry and cannot control myself", "keywords": "anger control emotions mind"}}
+- "exam में fail हो गया" → {{"english": "I failed my exam and don't know what to do next", "keywords": "failure duty action results karma"}}
+- "मुझे सुसाइड के विचार आ रहे हैं" → {{"english": "I am having suicidal thoughts and don't want to live", "keywords": "despair hopeless life soul uplift"}}
+- "मम्मी विदेश नहीं जाने दे रही" → {{"english": "My mother is not allowing me to go abroad for studies", "keywords": "duty path dharma family conflict"}}"""
+
+            resp = self.groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=settings.LLM_MODEL,
+                max_tokens=120,
+                temperature=0.0,
+                stream=False
+            )
+            raw = resp.choices[0].message.content.strip()
+
+            # Parse JSON robustly
+            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                english = result.get('english', query)
+                keywords = result.get('keywords', '')
+                logger.info(f"🌐 Translated: '{query[:40]}' → '{english[:60]}'")
+                return {
+                    'original': query,
+                    'english': english,
+                    'keywords': keywords
+                }
+        except Exception as e:
+            logger.warning(f"Translation failed, using raw query: {e}")
+
+        return {'original': query, 'english': query, 'keywords': query}
 
     def _keyword_search(self, query: str, top_k: int = 50) -> List[Tuple[int, float]]:
         """
@@ -227,23 +232,28 @@ class GitaAPI:
         # 1. MODERN CONTEXT MAPPING (The "Bridge")
         # Map modern problems directly to the BEST philosophical shlokas
         modern_mappings = {
-            # CRISIS / SUICIDE -> Soul Eternity, Do not yield, Divine Protection
-            'suicide': ['2.20', '2.22', '2.3', '18.66', '2.11'],
-            'die': ['2.20', '2.22', '2.3', '18.66', '2.13', '2.27'],
-            'kill myself': ['2.20', '2.22', '18.66'],
-            'hopeless': ['18.66', '9.22', '4.11', '18.78'],
-            
-            # WORK / CAREER / FAILURE -> Duty (2.47), Equanimity (2.38, 2.14)
+            # CRISIS / DESPAIR
+            # Best shlokas: 6.5 (uplift yourself), 2.3 (rise from despair),
+            #               2.20 (soul is eternal), 18.66 (divine protection)
+            # NOTE: The LLM classifier handles all linguistic variants —
+            #       these are just semantic anchors for the vector search boost.
+            'suicide': ['6.5', '2.3', '2.20', '18.66', '9.22'],
+            'suicidal': ['6.5', '2.3', '2.20', '18.66', '9.22'],
+            'hopeless': ['6.5', '2.3', '18.66', '9.22'],
+            'give up': ['6.5', '2.3', '2.14', '18.66'],
+            'kill myself': ['6.5', '2.3', '2.20', '18.66'],
+            'end my life': ['6.5', '2.3', '2.20', '18.66'],
+
+            # WORK / CAREER / FAILURE
             'job': ['2.47', '2.48', '3.8', '18.47', '18.48'],
             'work': ['2.47', '3.8', '3.19', '18.45', '18.46'],
             'exam': ['2.47', '2.38', '2.14', '6.5'],
             'fail': ['2.47', '2.38', '2.14', '6.5', '2.50'],
             'result': ['2.47', '2.55', '18.11', '5.10'],
             'money': ['2.47', '18.38', '17.20', '16.13'],
-            
-            
-            # PARENT / FAMILY CONFLICTS -> Own Path FIRST, then Duty
-            'mother': ['3.35', '18.47', '2.47', '2.38', '9.27'],  # Svadharma (own path) is most relevant
+
+            # PARENT / FAMILY CONFLICTS
+            'mother': ['3.35', '18.47', '2.47', '2.38', '9.27'],
             'father': ['3.35', '18.47', '2.47', '2.38', '9.27'],
             'mummy': ['3.35', '18.47', '2.47', '2.38', '9.27'],
             'papa': ['3.35', '18.47', '2.47', '2.38', '9.27'],
@@ -252,19 +262,18 @@ class GitaAPI:
             'family against': ['3.35', '18.47', '2.47'],
             'family conflict': ['3.35', '6.9', '2.47'],
 
-            
-            # RELATIONSHIPS / EMOTIONS -> Attachment (2.62-63), Peace (2.71)
+            # RELATIONSHIPS / EMOTIONS
             'breakup': ['2.62', '2.63', '2.66', '5.22', '18.54'],
             'love': ['2.62', '2.63', '12.13', '12.14'],
             'lonely': ['6.30', '9.29', '18.54', '13.16'],
             'cheat': ['3.37', '16.21', '16.23'],
-            
-            # MENTAL HEALTH -> Mind Control (6.6, 6.35), Meditation
-            'depression': ['2.3', '6.5', '6.6', '18.35'],
+
+            # MENTAL HEALTH
+            'depression': ['6.5', '2.3', '6.6', '2.14', '18.66'],
             'anxiety': ['2.14', '6.26', '6.35', '18.66'],
             'stress': ['2.14', '2.56', '2.71', '12.15'],
             'confused': ['2.7', '18.61', '18.66', '18.73'],
-            'anger': ['2.63', '16.21', '3.37', '3.38']
+            'anger': ['2.63', '16.21', '3.37', '3.38'],
         }
 
         # Check for modern triggers
@@ -583,9 +592,8 @@ class GitaAPI:
             'entertainment': ['movie', 'film', 'actor', 'actress', 'bollywood', 'hollywood',
                             'tv show', 'series', 'netflix', 'celebrity', 'singer', 'song'],
             
-            # Technology & Products
+            # Technology & Products (only product/tech questions, NOT social media life problems)
             'technology': ['iphone', 'android', 'laptop', 'computer', 'software', 'app',
-                         'facebook', 'instagram', 'twitter', 'whatsapp', 'google',
                          'microsoft', 'apple inc', 'samsung'],
             
             # General Trivia
@@ -626,66 +634,69 @@ class GitaAPI:
             # Krishna & Deities
             'krishna', 'कृष्ण', 'भगवान', 'bhagwan', 'god', 'ishwar', 'ईश्वर',
             'arjun', 'अर्जुन', 'radha', 'राधा', 'vishnu', 'विष्णु',
-            
+
             # Bhagavad Gita & Scriptures
             'gita', 'गीता', 'shloka', 'श्लोक', 'verse', 'chapter', 'अध्याय',
             'scripture', 'sacred', 'holy', 'divine',
-            
+
             # Spiritual Concepts
             'dharma', 'धर्म', 'karma', 'कर्म', 'yoga', 'योग', 'bhakti', 'भक्ति',
             'atma', 'आत्मा', 'soul', 'spiritual', 'आध्यात्मिक', 'meditation', 'ध्यान',
             'moksha', 'मोक्ष', 'liberation', 'enlightenment', 'nirvana', 'samadhi',
-            
+
             # Life Guidance Topics
             'life', 'जीवन', 'purpose', 'meaning', 'path', 'मार्ग', 'way',
             'problem', 'समस्या', 'solution', 'समाधान', 'help', 'मदद', 'guide',
-            
-            # Emotions & Mental States (Valid spiritual topics)
+            'chahta', 'chahti', 'chahiye', 'karna', 'karu', 'karoon', 'karun',
+            'batao', 'bataiye', 'btao', 'btaiye', 'samjhao',
+
+            # Emotions & Mental States
             'anger', 'क्रोध', 'peace', 'शांति', 'fear', 'भय', 'anxiety', 'चिंता',
             'stress', 'depression', 'sad', 'दुख', 'happy', 'सुख', 'joy', 'आनंद',
-            'confused', 'असमंजस', 'lost', 'hopeless', 'निराश',
-            
-            # Relationships (Valid spiritual topics)
+            'confused', 'असमंजस', 'lost', 'hopeless', 'निराश', 'pareshan',
+            'dukhi', 'udaas', 'akela', 'tanha', 'dara', 'ghabra',
+            'gussa', 'ghussa', 'chinta', 'tension', 'takleef', 'mushkil',
+            'suicidal', 'suicide', 'marna', 'jeena', 'zindagi', 'jindagi',
+
+            # Relationships
             'love', 'प्रेम', 'hate', 'घृणा', 'family', 'परिवार', 'friend', 'मित्र',
             'relationship', 'संबंध', 'marriage', 'विवाह', 'breakup',
-            
-            # Work & Duty (Valid spiritual topics)
+            'mummy', 'mama', 'papa', 'father', 'mother', 'bhai', 'behen', 'sister',
+            'brother', 'dost', 'yaar', 'girlfriend', 'boyfriend', 'wife', 'husband',
+            'pati', 'patni', 'beta', 'beti', 'ghar', 'gharwale', 'parents',
+            'rishtedaar', 'rishta', 'shaadi', 'divorce', 'pyaar', 'mohabbat',
+
+            # Work, Study & Career
             'work', 'काम', 'job', 'नौकरी', 'duty', 'कर्तव्य', 'responsibility',
             'success', 'सफलता', 'failure', 'असफलता', 'exam', 'परीक्षा',
-            
-            # Existential Questions (Valid)
+            'padhai', 'padhna', 'study', 'college', 'school', 'university',
+            'naukri', 'business', 'career', 'future', 'australia', 'abroad',
+            'videsh', 'bahar', 'jaana', 'jane', 'permission', 'allow',
+            'mana', 'roka', 'rok', 'nahi dete', 'nahi de rahi', 'nahi de rhe',
+
+            # Existential Questions
             'why', 'क्यों', 'how', 'कैसे', 'what is', 'क्या है', 'who am i',
             'death', 'मृत्यु', 'birth', 'जन्म', 'suffering', 'कष्ट',
-            'desire', 'इच्छा', 'attachment', 'मोह', 'ego', 'अहंकार'
+            'desire', 'इच्छा', 'attachment', 'मोह', 'ego', 'अहंकार',
+
+            # Common Hinglish life situation words
+            'kya karu', 'kya karun', 'kya karoon', 'kya karna chahiye',
+            'kaise karu', 'kaise karun', 'kaise karoon',
+            'sahi', 'galat', 'theek', 'bura', 'acha', 'achha',
+            'meri', 'mera', 'mere', 'mujhe', 'mujhko', 'main', 'hum',
+            'nahi', 'nhi', 'mat', 'ruk', 'rok',
         ]
-        
+
         # If query contains any relevant keyword, it's likely valid
         if any(keyword in query_lower for keyword in relevant_keywords):
             logger.info(f"✅ Relevant query detected: '{query}'")
             return True, ""
-        
-        # If query is a general life question without specific irrelevant keywords
-        # we allow it (benefit of doubt for spiritual guidance)
-        general_question_words = ['why', 'how', 'what', 'when', 'should i', 'can i',
-                                 'kya', 'kaise', 'kab', 'kyun', 'क्या', 'कैसे']
-        
-        if any(qw in query_lower for qw in general_question_words):
-            # It's a question, and we didn't find irrelevant patterns
-            # Let's allow it as it might be seeking life guidance
-            logger.info(f"✅ General life question allowed: '{query}'")
-            return True, ""
-        
-        # If we reach here, the query is likely too vague or unrelated
-        logger.warning(f"⚠️ Unclear query relevance: '{query}'")
-        return False, f"""क्षमा करें, मैं आपके प्रश्न को पूरी तरह से समझ नहीं पाया। मैं श्री कृष्ण हूँ और जीवन की समस्याओं का समाधान देने के लिए यहाँ हूँ।
 
-आप मुझसे पूछ सकते हैं:
-• जीवन की चुनौतियों का सामना कैसे करें?
-• क्रोध, भय, या चिंता से कैसे मुक्त हों?
-• कर्म, धर्म, और जीवन के उद्देश्य के बारे में
-• रिश्तों और भावनाओं के बारे में मार्गदर्शन
-
-कृपया अपना प्रश्न स्पष्ट रूप से पूछें। 🙏"""
+        # DEFAULT: Allow all queries that aren't explicitly irrelevant.
+        # Real life problems come in many forms - benefit of doubt always.
+        # Only hard-coded irrelevant patterns (sports, politics, etc.) are rejected above.
+        logger.info(f"✅ Allowing query (default pass): '{query}'")
+        return True, ""
 
     def search_with_llm(self, query: str, conversation_history: List[Dict] = None, **kwargs) -> Dict[str, Any]:
         """End-to-end RAG answer with conversation context."""

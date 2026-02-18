@@ -241,6 +241,18 @@ class GitaAPI:
             'result': ['2.47', '2.55', '18.11', '5.10'],
             'money': ['2.47', '18.38', '17.20', '16.13'],
             
+            
+            # PARENT / FAMILY CONFLICTS -> Own Path FIRST, then Duty
+            'mother': ['3.35', '18.47', '2.47', '2.38', '9.27'],  # Svadharma (own path) is most relevant
+            'father': ['3.35', '18.47', '2.47', '2.38', '9.27'],
+            'mummy': ['3.35', '18.47', '2.47', '2.38', '9.27'],
+            'papa': ['3.35', '18.47', '2.47', '2.38', '9.27'],
+            'parents': ['3.35', '18.47', '2.47', '2.38', '9.27'],
+            'family refuse': ['3.35', '18.47', '2.47'],
+            'family against': ['3.35', '18.47', '2.47'],
+            'family conflict': ['3.35', '6.9', '2.47'],
+
+            
             # RELATIONSHIPS / EMOTIONS -> Attachment (2.62-63), Peace (2.71)
             'breakup': ['2.62', '2.63', '2.66', '5.22', '18.54'],
             'love': ['2.62', '2.63', '12.13', '12.14'],
@@ -256,11 +268,14 @@ class GitaAPI:
         }
 
         # Check for modern triggers
-        boosted_shlokas = set()
+        boosted_shlokas = {}  # Changed to dict to store priority
         for term, ids in modern_mappings.items():
             if term in query_lower:
-                for sid in ids:
-                    boosted_shlokas.add(sid)
+                for priority, sid in enumerate(ids):
+                    # Higher boost for earlier positions in the list (bigger gap for priority)
+                    boost_value = 15.0 - (priority * 2.5)  # First=15, Second=12.5, Third=10...
+                    if sid not in boosted_shlokas or boosted_shlokas[sid] < boost_value:
+                        boosted_shlokas[sid] = boost_value
                     
         # 2. DEFINITIVE KEYWORD MAPPING
         keywords = {
@@ -314,10 +329,10 @@ class GitaAPI:
             verse_id = item.get('id', '')
             score = 0.0
             
-            # 3. DIRECT BOOSTING for modern contexts
-            # If shloka ID is in the boosted list for this query, give huge boost
+            # 3. DIRECT BOOSTING for modern contexts (priority-based)
+            # If shloka ID is in the boosted list for this query, give priority-based boost
             if verse_id in boosted_shlokas:
-                score += 15.0  # Massive score boost for manually curated matches
+                score += boosted_shlokas[verse_id]  # Use priority-based boost value
             
             # 4. NARRATIVE FILTER (Penalize non-Krishna speakers for advice queries)
             # If verse is likely narrative (Sanjay/Dhritarashtra speaking), reduce score
@@ -363,49 +378,43 @@ class GitaAPI:
         if not self.semantic_model:
             return []
              
-        # FastEmbed returns a generator of batches, so we list() it to get all batches
-        # Since we only send one query, we get one batch, take the first item
-        # The result is a numpy array of embeddings
-        embedding_gen = self.semantic_model.embed([query])
-        # Force list conversion to inspect
         try:
-            batches = list(embedding_gen)
-            if not batches or len(batches[0]) == 0:
+            # FastEmbed returns a generator of numpy arrays (batches)
+           # For a single query, we get one or more batches, stack them
+            embedding_gen = self.semantic_model.embed([query])
+            
+            # Convert generator to list and stack
+            embedding_batches = list(embedding_gen)
+            
+            if not embedding_batches:
                 logger.error("FastEmbed returned no embeddings")
                 return []
             
-            q_vec = batches[0][0]
+            # Stack all batches vertically to get (1, dim) or (N, dim)
+            q_vec = np.vstack(embedding_batches)
             
-            # Ensure q_vec is 2D (1, dim) for sklearn
-            if hasattr(q_vec, 'reshape'):
-                q_vec = q_vec.reshape(1, -1)
-            else:
-                q_vec = np.array([q_vec])
-
-            # Ensure embeddings is 2D (N, dim)
-            # If embeddings is 1D (flattened), means N*dim elements.
-            # We need to reshape it to (-1, dim)
-            if hasattr(self.embeddings, 'ndim') and self.embeddings.ndim == 1:
-                # If embeddings got flattened, reshape it back? Or assume it's one sample?
-                if self.embeddings.shape[0] > 0:
-                     # Calculate assuming standard dimension
-                     # FastEmbed (bge-small-en-v1.5) dim = 384
-                     dim = 384
-                     if self.embeddings.shape[0] % dim == 0:
-                         logger.warning(f"Embeddings array is 1D: {self.embeddings.shape}. Reshaping to (-1, {dim}).")
-                         self.embeddings = self.embeddings.reshape(-1, dim)
-                     else:
-                         # Fallback or error?
-                         logger.error(f"Embeddings 1D shape {self.embeddings.shape} not divisible by {dim}. Cannot reshape.")
-                         return []
+            # Should be (1, 384) for single query
+            if q_vec.shape[0] != 1:
+                logger.warning(f"Expected 1 query embedding, got {q_vec.shape[0]}. Using first.")
+                q_vec = q_vec[0:1]
+            
+            # Verify shapes
+            if q_vec.shape[1] != self.embeddings.shape[1]:
+                logger.error(f"Dimension mismatch: query {q_vec.shape[1]} vs embeddings {self.embeddings.shape[1]}")
+                return []
 
             if len(self.embeddings) == 0:
                  return []
 
+            # Compute similarities
             sims = cosine_similarity(q_vec, self.embeddings)[0]
+            
         except Exception as e:
             logger.error(f"Semantic search failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
+            
         # Get indices
         idxs = np.argsort(sims)[::-1][:top_k]
         return [(int(i), float(sims[i])) for i in idxs]

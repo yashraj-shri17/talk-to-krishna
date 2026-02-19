@@ -275,8 +275,9 @@ Give a direct, practical answer based on the Gita."""
             pres_penalty = 0.5
 
             # Step 5: Generate answer
-            if stream:
-                response = self.client.chat.completions.create(
+            def _call_groq(use_penalties: bool):
+                """Call Groq API, optionally with repetition penalties."""
+                kwargs = dict(
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
@@ -284,27 +285,26 @@ Give a direct, practical answer based on the Gita."""
                     model=self.model,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    frequency_penalty=freq_penalty,
-                    presence_penalty=pres_penalty,
-                    stream=True
+                    stream=stream
                 )
+                if use_penalties:
+                    kwargs["frequency_penalty"] = freq_penalty
+                    kwargs["presence_penalty"] = pres_penalty
+                return self.client.chat.completions.create(**kwargs)
+
+            try:
+                response = _call_groq(use_penalties=True)
+            except (TypeError, Exception) as sdk_err:
+                # Older groq SDK (<0.9) rejects frequency_penalty — fallback gracefully
+                logger.warning(f"Groq penalty params rejected ({sdk_err}), retrying without them.")
+                response = _call_groq(use_penalties=False)
+
+            if stream:
                 answer_text = ""
                 for chunk in response:
                     if chunk.choices[0].delta.content:
                         answer_text += chunk.choices[0].delta.content
             else:
-                response = self.client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    frequency_penalty=freq_penalty,
-                    presence_penalty=pres_penalty,
-                    stream=False
-                )
                 answer_text = response.choices[0].message.content
 
             logger.info(f"✓ [{tone.upper()}] answer generated: {len(answer_text)} chars")

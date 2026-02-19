@@ -175,8 +175,10 @@ function VoiceChat() {
             const response = await axios.post(API_URL, {
                 question: text,
                 include_audio: false,
-                session_id: sessionId, // NEW: Pass session ID for fresh context
+                session_id: sessionId, // Pass session ID for fresh context
                 user_id: user?.id  // Send user ID if logged in
+            }, {
+                timeout: 60000  // 60s — allows Render free tier to wake from sleep
             });
 
             const textTime = performance.now() - startTime;
@@ -196,10 +198,13 @@ function VoiceChat() {
 
         } catch (error) {
             console.error('Error:', error);
+            const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
             const errorMsg = {
                 id: Date.now() + 1,
                 type: 'krishna',
-                text: 'क्षमा करें, कुछ गलत हो गया। कृपया पुनः प्रयास करें।',
+                text: isTimeout
+                    ? 'सर्वर जाग रहा है, कृपया 30 सेकंड बाद पुनः प्रयास करें। 🙏'
+                    : 'क्षमा करें, कुछ गलत हो गया। कृपया पुनः प्रयास करें।',
                 timestamp: new Date()
             };
             setMessages(prev => [...prev, errorMsg]);

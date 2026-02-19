@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     TFIDF_MODEL_FILE: str = "models/gita_tfidf.pkl"
     
     # Model configuration
-    SENTENCE_TRANSFORMER_MODEL: str = "BAAI/bge-base-en-v1.5"  # Upgraded to Base model for better accuracy
+    SENTENCE_TRANSFORMER_MODEL: str = "BAAI/bge-small-en-v1.5"  # Switched to Small model for Render compatibility (512MB RAM)
     EMBEDDING_BATCH_SIZE: int = 32
     LLM_MODEL: str = "llama-3.3-70b-versatile"  # Upgraded for better reasoning
     

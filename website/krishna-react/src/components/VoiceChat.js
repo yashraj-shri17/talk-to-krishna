@@ -411,6 +411,7 @@ function VoiceChat() {
             <MessageHistory
                 messages={messages}
                 isOpen={showHistory}
+                onSpeak={speakText}
                 onClose={() => {
                     // Stop audio when closing history
                     if (isSpeaking) {

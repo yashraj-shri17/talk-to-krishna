@@ -11,6 +11,9 @@ from typing import Dict, List, Any, Optional
 import numpy as np
 from fastembed import TextEmbedding
 # from sentence_transformers import SentenceTransformer
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import settings
 from src.logger import setup_logger
@@ -108,32 +111,35 @@ class EmbeddingGenerator:
                 meaning = verse.get('meaning', '')
                 text = verse.get('text', '')
                 
-                # IMPROVED: Combine Sanskrit + Meaning + Emotions for richer embeddings
-                # This helps when users use Sanskrit terms or describe feelings like "sadness", "confusion"
-                emotions = verse.get('emotions', {})
-                dominant_emotion = verse.get('dominant_emotion', 'neutral')
+                # IMPROVED: Combine Sanskrit + English Meaning + Emotions for richer semantic embeddings
+                # Prioritizing English meaning ensures better compatibility with the English embedding model
+                meaning_english = verse.get('meaning_english', verse.get('meaning', '')) # Fallback to Hindi if no English
                 
                 # Get top emotions > 0.3
+                emotions = verse.get('emotions', {})
+                dominant_emotion = verse.get('dominant_emotion', 'neutral')
                 top_emotions = [k for k, v in emotions.items() if v > 0.3]
                 emotion_text = " ".join(top_emotions)
                 
                 # Create a "Super String" for the AI to read
-                full_text = f"{text} {meaning} {dominant_emotion} {emotion_text}"
+                # Format: [English Meaning] [Sanskrit] [Emotion Keywords]
+                full_text = f"{meaning_english} {text} {dominant_emotion} {emotion_text}"
                 
                 shloka_info = {
                     "id": f"{ch_id}.{v_id}",
                     "chapter": ch_id,
                     "verse": v_id,
                     "sanskrit": text,
-                    "meaning": meaning,
-                    "emotions": verse.get('emotions', {}),
-                    "dominant_emotion": verse.get('dominant_emotion', 'neutral')
+                    "meaning": meaning, # Keep original (Hindi) for display
+                    "meaning_english": meaning_english, # Keep English for LLM context
+                    "emotions": emotions,
+                    "dominant_emotion": dominant_emotion
                 }
                 
                 shloka_list.append(shloka_info)
                 texts_to_embed.append(full_text)
         
-        logger.info(f"Prepared {len(texts_to_embed)} verses for embedding")
+        logger.info(f"Prepared {len(texts_to_embed)} verses for embedding (using English-first approach)")
         return shloka_list, texts_to_embed
     
     def generate_embeddings(

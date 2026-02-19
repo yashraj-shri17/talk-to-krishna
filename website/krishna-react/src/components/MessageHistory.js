@@ -1,7 +1,8 @@
+
 import React, { useState } from 'react';
 import './MessageHistory.css';
 
-function MessageHistory({ messages, isOpen, onClose, onClearHistory }) {
+function MessageHistory({ messages, isOpen, onClose, onClearHistory, onSpeak }) {
     const [showConfirmDialog, setShowConfirmDialog] = useState(false);
 
     const formatMessage = (text) => {
@@ -83,9 +84,23 @@ function MessageHistory({ messages, isOpen, onClose, onClearHistory }) {
                         messages.map((message) => (
                             <div key={message.id} className={`history-message ${message.type}`}>
                                 <div className="message-header">
-                                    <span className="message-author">
-                                        {message.type === 'krishna' ? '🪈 Krishna' : '👤 You'}
-                                    </span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <span className="message-author">
+                                            {message.type === 'krishna' ? '🪈 Krishna' : '👤 You'}
+                                        </span>
+                                        {message.type === 'krishna' && (
+                                            <button
+                                                className="speak-button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onSpeak(message.text);
+                                                }}
+                                                title="Read aloud"
+                                            >
+                                                🔊
+                                            </button>
+                                        )}
+                                    </div>
                                     <span className="message-time">
                                         {message.timestamp.toLocaleTimeString('en-US', {
                                             hour: '2-digit',

@@ -2,14 +2,17 @@
 Unified Production-Grade API for Talk to Krishna.
 Implements multi-stage retrieval RAG system.
 """
+# -*- coding: utf-8 -*-
 import json
+import os
+import unicodedata
+
 import re
 import pickle
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Literal
 from fastembed import TextEmbedding
-# from sentence_transformers import SentenceTransformer, CrossEncoder # REMOVED for memory efficiency
 from sklearn.metrics.pairwise import cosine_similarity
 from groq import Groq
 
@@ -85,7 +88,9 @@ class GitaAPI:
                             'meaning': hindi_meaning,  # Hindi for display to user
                             'meaning_english': english_meaning,  # English for search
                             # Create rich searchable text with English + Sanskrit
-                            'searchable_text': f"{english_meaning} {text}".lower()
+                            'searchable_text': f"{english_meaning} {text}".lower(),
+                            'emotions': v_data.get('emotions', {}),
+                            'dominant_emotion': v_data.get('dominant_emotion', 'neutral')
                         })
         else:
             # Fallback to Hindi-only version
@@ -111,7 +116,9 @@ class GitaAPI:
                             'meaning': meaning,
                             'meaning_english': meaning,  # Same as Hindi if no English
                             # Create rich searchable text
-                            'searchable_text': f"{meaning} {text}".lower()
+                            'searchable_text': f"{meaning} {text}".lower(),
+                            'emotions': v_data.get('emotions', {}),
+                            'dominant_emotion': v_data.get('dominant_emotion', 'neutral')
                         })
         
         print(f"   {len(self.shlokas)} shlokas loaded")
@@ -123,8 +130,24 @@ class GitaAPI:
              raise FileNotFoundError(f"Embeddings missing. Run rebuild_embeddings.py first!")
              
         with open(settings.embeddings_path, 'rb') as f:
+            # Load embeddings
             data = pickle.load(f)
             self.embeddings = data['embeddings']
+            
+            # Reshape if flattened (FastEmbed/Pickle quirk)
+            if self.embeddings.ndim == 1:
+                # Deduce dimension from size
+                # We know logic: num_verses = 683 (usually)
+                # But safer to use the loaded shlokas length
+                n_shlokas = len(self.shlokas)
+                if n_shlokas > 0:
+                    dim = self.embeddings.size // n_shlokas
+                    logger.info(f"Reshaping 1D embeddings: {self.embeddings.shape} -> ({n_shlokas}, {dim})")
+                    self.embeddings = self.embeddings.reshape(n_shlokas, dim)
+                else:
+                    # Fallback logic if shlokas not loaded yet (should not happen due to order)
+                    pass
+            
             # Safety check: Ensure model matches
             saved_model_name = data.get('model_name', '')
             configured_model = settings.SENTENCE_TRANSFORMER_MODEL
@@ -177,47 +200,68 @@ class GitaAPI:
         if not self.groq_client:
             # No Groq client — fall back to raw query (degraded quality)
             logger.warning("No Groq client for translation, using raw query")
-            return {'original': query, 'english': query, 'keywords': query}
+            return {'original': query, 'english': query, 'keywords': query, 'is_relevant': True}
 
         try:
-            prompt = f"""Translate this Hindi/Hinglish message to English. Also extract 3-5 philosophical keywords.
+            # Smart prompt for Translation + Keyword Extraction + Relevance Check
+            prompt = f"""You are the NLU engine for 'Talk to Krishna'.
+            
+Analyze this query: "{query}"
 
-Message: "{query}"
+Determine strictly if this is a SPIRITUAL/LIFE GUIDANCE question or just generic chat/trivia.
 
-Respond in this exact JSON format (no extra text):
-{{"english": "<English translation>", "keywords": "<space-separated philosophical keywords>"}}
+Respond in STRICT JSON:
+{{
+  "rewritten_query": "A clear, specific English statement of the user's core problem for semantic search.",
+  "emotional_state": "One of: neutral, confused, angry, fear, distress, crisis, depressive, grateful, happy",
+  "keywords": "3-5 key spiritual concepts (e.g., dharma, karma, soul, duty)",
+  "is_relevant": true/false
+}}
+
+RULES FOR 'is_relevant':
+- TRUE if: Personal problem, emotional distress, philosophical question about life/death/God, or requesting spiritual guidance.
+- FALSE if: 
+  - Cooking/Food recipes (e.g., "chai kaise banaye", "pizza recipe")
+  - Math/Science homework (e.g., "2+2", "gravity formula", "calculation", "percentage")
+  - Coding/Technical/Software (e.g., "github", "repo", "install", "download", "app", "website", "error fix")
+  - General Trivia/GK (e.g., "capital of India", "who won match", "news")
+  - Casual chit-chat without depth (e.g., "bored", "tell joke", "hi", "hello")
 
 Examples:
-- "मुझे बहुत गुस्सा आता है" → {{"english": "I get very angry and cannot control myself", "keywords": "anger control emotions mind"}}
-- "exam में fail हो गया" → {{"english": "I failed my exam and don't know what to do next", "keywords": "failure duty action results karma"}}
-- "मुझे सुसाइड के विचार आ रहे हैं" → {{"english": "I am having suicidal thoughts and don't want to live", "keywords": "despair hopeless life soul uplift"}}
-- "मम्मी विदेश नहीं जाने दे रही" → {{"english": "My mother is not allowing me to go abroad for studies", "keywords": "duty path dharma family conflict"}}"""
+- "Github par repo kaise banaye" -> {{ "rewritten_query": "Github repository creation", "emotional_state": "neutral", "keywords": "tech", "is_relevant": false }}
+- "Chai kaise banate hain?" -> {{ "rewritten_query": "How to make tea", "emotional_state": "neutral", "keywords": "cooking", "is_relevant": false }}
+- "2+2 kitna hota hai?" -> {{ "rewritten_query": "Math calculation", "emotional_state": "neutral", "keywords": "math", "is_relevant": false }}
+- "Aaj weather kaisa hai?" -> {{ "rewritten_query": "Weather forecast", "emotional_state": "neutral", "keywords": "weather", "is_relevant": false }}
+- "Python mein list sort kaise kare?" -> {{ "rewritten_query": "Python coding help", "emotional_state": "neutral", "keywords": "coding", "is_relevant": false }}
+- "Mummy papa shaadi ke liye nahi maan rahe" -> {{ "rewritten_query": "My parents are not approving my marriage choice, causing family conflict.", "emotional_state": "distress", "keywords": "family duty love conflict", "is_relevant": true }}
+- "Mummy papa shaadi ke liye nahi maan rahe" -> {{ "rewritten_query": "My parents are not approving my marriage choice, causing family conflict.", "emotional_state": "distress", "keywords": "family duty love conflict", "is_relevant": true }}
+- "Man bahut pareshan hai" -> {{ "rewritten_query": "My mind is very restless and I seek peace.", "emotional_state": "confused", "keywords": "mind peace focus", "is_relevant": true }}"""
 
             resp = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model=settings.LLM_MODEL,
-                max_tokens=120,
+                model="llama-3.3-70b-versatile",
+                max_tokens=150,
                 temperature=0.0,
-                stream=False
+                stream=False,
+                response_format={"type": "json_object"}
             )
-            raw = resp.choices[0].message.content.strip()
+            
+            raw_content = resp.choices[0].message.content.strip()
+            result = json.loads(raw_content)
+            
+            return {
+                'original': query,
+                'english': result.get('english', query),
+                'rewritten_query': result.get('rewritten_query', result.get('english', query)),
+                'emotional_state': result.get('emotional_state', 'neutral'),
+                'keywords': result.get('keywords', query),
+                'is_relevant': result.get('is_relevant', True)
+            }
 
-            # Parse JSON robustly
-            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-                english = result.get('english', query)
-                keywords = result.get('keywords', '')
-                logger.info(f"🌐 Translated: '{query[:40]}' → '{english[:60]}'")
-                return {
-                    'original': query,
-                    'english': english,
-                    'keywords': keywords
-                }
         except Exception as e:
-            logger.warning(f"Translation failed, using raw query: {e}")
-
-        return {'original': query, 'english': query, 'keywords': query}
+            logger.error(f"Translation/Analysis failed: {str(e)}")
+            # Fallback: Assume relevant
+            return {'original': query, 'english': query, 'keywords': query, 'is_relevant': True}
 
     def _keyword_search(self, query: str, top_k: int = 50) -> List[Tuple[int, float]]:
         """
@@ -389,18 +433,24 @@ Examples:
              
         try:
             # FastEmbed returns a generator of numpy arrays (batches)
-           # For a single query, we get one or more batches, stack them
+            # For a single query, we get one generator that yields batches
             embedding_gen = self.semantic_model.embed([query])
             
-            # Convert generator to list and stack
-            embedding_batches = list(embedding_gen)
+            # Consume generator to get the first batch
+            # embed() yields np.ndarray of shape (batch_size, dim)
+            # Since input is length 1, result is likely one batch of shape (1, dim)
+            first_batch = next(embedding_gen)
             
-            if not embedding_batches:
-                logger.error("FastEmbed returned no embeddings")
-                return []
+            if first_batch is None or first_batch.size == 0:
+                 logger.error("FastEmbed returned empty embedding")
+                 return []
+                 
+            # Ensure 2D (1, dim)
+            if first_batch.ndim == 1:
+                q_vec = first_batch.reshape(1, -1)
+            else:
+                q_vec = first_batch
             
-            # Stack all batches vertically to get (1, dim) or (N, dim)
-            q_vec = np.vstack(embedding_batches)
             
             # Should be (1, 384) for single query
             if q_vec.shape[0] != 1:
@@ -428,27 +478,103 @@ Examples:
         idxs = np.argsort(sims)[::-1][:top_k]
         return [(int(i), float(sims[i])) for i in idxs]
 
-    def search(self, query: str, method: str = "hybrid", top_k: int = 10, **kwargs) -> List[Dict[str, Any]]:
+    def _rerank_with_llm(self, query: str, rewritten: str, candidates: List[Dict]) -> List[Dict]:
+        """
+        Use LLM to rerank top candidates based on relevance to the specific problem.
+        This provides a 'second opinion' to fix vector search blind spots.
+        """
+        if not self.groq_client or not candidates:
+            return candidates
+
+        try:
+            # Format candidates for LLM review
+            options_text = ""
+            for i, c in enumerate(candidates, 1):
+                options_text += f"Option {i} (ID {c['id']}): {c['meaning_english'][:300]}\n"
+            
+            prompt = f"""You are a spiritual expert. Rerank these Bhagavad Gita verses based on their relevance to this user's problem.
+            
+User: "{rewritten}" (Original: "{query}")
+
+Verses:
+{options_text}
+
+Task:
+1. Identify the MOST relevant verse that directly provides a solution or perspective.
+2. Order them from Best to Worst.
+3. Return ONLY a list of IDs in JSON format.
+
+Example: ["2.47", "18.66"]"""
+            
+            resp = self.groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                max_tokens=200,
+                temperature=0.0,
+                response_format={"type": "json_object"}
+            )
+            
+            content = resp.choices[0].message.content.strip()
+            # Handle potential wrapper keys
+            try:
+                data = json.loads(content)
+                if isinstance(data, list):
+                    ranked_ids = data
+                elif isinstance(data, dict):
+                     # extensive search for list in values
+                     ranked_ids = next((v for v in data.values() if isinstance(v, list)), [])
+                else:
+                    ranked_ids = []
+            except:
+                ranked_ids = []
+            
+            # Create a map for O(1) lookup
+            candidate_map = {c['id']: c for c in candidates}
+            
+            # Reconstruct list in new order
+            reranked = []
+            seen = set()
+            for rid in ranked_ids:
+                if rid in candidate_map and rid not in seen:
+                    reranked.append(candidate_map[rid])
+                    seen.add(rid)
+            
+            # Append any missing ones at the end
+            for c in candidates:
+                if c['id'] not in seen:
+                    reranked.append(c)
+                    
+            if reranked:
+                logger.info(f"LLM Reranked top result: {reranked[0]['id']}")
+            return reranked
+            
+        except Exception as e:
+            logger.warning(f"Reranking failed: {e}")
+            return candidates
+
+    def search(self, query: str, method: str = "hybrid", top_k: int = 10, understanding: Dict = None, **kwargs) -> List[Dict[str, Any]]:
         """
         Multi-Perspective Search Strategy to find the 'Sahi Shloka'.
         """
         self._load_resources()
         
-        # 1. Continuous Refining (Get multiple angles)
-        variations = self._understand_query(query)
+        # 1. Understanding
+        variations = understanding if understanding else self._understand_query(query)
+        rewritten_query = variations.get('rewritten_query', query)
+        emotional_state = variations.get('emotional_state', 'neutral')
         
         candidates = {} # Map id -> score
         
         # 2. Search from English Perspective (Semantic Vectors work best here)
-        eng_res = self._semantic_search(variations.get('english', query), top_k=75)
+        # Use rewritten query for better semantic match
+        eng_res = self._semantic_search(rewritten_query, top_k=75)
         for idx, score in eng_res:
             candidates[idx] = candidates.get(idx, 0.0) + score
             
         # 3. Search from Keyword Perspective (Catch specific Sanskrit terms)
         kw_query = f"{variations.get('keywords', '')} {query}"
-        kw_res = self._keyword_search(kw_query, top_k=50) # Keep strong keywords
+        kw_res = self._keyword_search(kw_query, top_k=50) 
         for idx, score in kw_res:
-             # Boost keyword matches significantly
             candidates[idx] = candidates.get(idx, 0.0) + (score * 1.5)
             
         # 4. Search Original (Context)
@@ -456,35 +582,68 @@ Examples:
         for idx, score in orig_res:
             candidates[idx] = candidates.get(idx, 0.0) + score
 
-        # Sort and take top pool for Re-ranking
-        # We INCREASED this from 40 to 100 to ensure we don't miss "hidden gems"
-        pool_idxs = sorted(candidates.keys(), key=lambda k: candidates[k], reverse=True)[:100]
+        # 5. Apply Emotion Filters & Verification
+        # Map LLM emotional state to JSON keys
+        emotion_map = {
+            'angry': 'anger',
+            'confused': 'confusion',
+            'happy': 'happiness',
+            'grateful': 'devotion',
+            'depressive': 'sadness',
+            'distress': 'sadness',
+            'peace': 'peace',
+            'fear': 'fear',
+            'duty': 'duty'
+        }
+        target_emotion = emotion_map.get(emotional_state, emotional_state)
         
-        # 5. Cross-Encoder Re-ranking (The Final Judge)
-        final_idxs = pool_idxs
-        if self.cross_encoder:
-            # We re-rank against the ORIGINAL query + English Intent for best context matching
-            rerank_query = f"{query} {variations.get('english', '')}"
-            pairs = [(rerank_query, self.shlokas[i]['meaning']) for i in pool_idxs]
+        for idx in list(candidates.keys()):
+            shloka = self.shlokas[idx]
             
-            ce_scores = self.cross_encoder.predict(pairs)
+            # Boost if shloka's dominant emotion matches user's state
+            if target_emotion != 'neutral' and target_emotion in shloka.get('emotions', {}):
+                 # Check strength
+                 strength = shloka.get('emotions', {}).get(target_emotion, 0)
+                 if strength > 0.4:
+                     # Calculate boost based on strength
+                     boost = 3.0 * (strength + 0.5) # Dynamic boost
+                     candidates[idx] += boost 
             
-            # Zip and sort
-            reranked = sorted(
-                zip(pool_idxs, ce_scores), 
-                key=lambda x: x[1], 
-                reverse=True
-            )
-            final_idxs = [x[0] for x in reranked]
+            # Penalize generic/narrative verses unless boosted by keywords
+            verse_id = shloka.get('id', '')
+            # (Narrative penalty logic is already in keyword search, but let's reinforce if needed)
+
+        initial_results = []
+        # Create a list of dictionaries with scores for debugging
+        debug_candidates = []
+        
+        # Sort by score for initial selection
+        sorted_candidates = sorted(candidates.items(), key=lambda item: item[1], reverse=True)
+        top_pool_idxs = [idx for idx, score in sorted_candidates[:15]]
+        
+        for idx in top_pool_idxs:
+            shloka_copy = self.shlokas[idx].copy()
+            shloka_copy['score'] = candidates[idx]
+            initial_results.append(shloka_copy)
             
-        # 6. Format Results
-        results = []
-        for i in final_idxs[:top_k]:
-            item = self.shlokas[i].copy()
-            results.append(item)
+        # 6. LLM Reranking (The Final Judge)
+        # Rerank the top 15 to find the true best 5
+        final_results = self._rerank_with_llm(query, rewritten_query, initial_results)
             
-        logger.info(f"Returning {len(results)} matches after refinement.")
-        return results
+        logger.info(f"Returning {min(len(final_results), top_k)} matches after refinement.")
+        
+        # Return debug info if requested
+        if kwargs.get('debug', False):
+            debug_info = {
+                'rewritten_query': rewritten_query,
+                'emotional_state': emotional_state,
+                'keywords': variations.get('keywords', ''),
+                'initial_pool': [f"{r['id']} (Score: {r.get('score', 0):.2f})" for r in initial_results],
+                'final_ranked': [r['id'] for r in final_results[:top_k]]
+            }
+            return final_results[:top_k], debug_info
+            
+        return final_results[:top_k]
 
     def _is_greeting(self, query: str) -> bool:
         """Check if the query is a simple greeting."""
@@ -578,46 +737,111 @@ Examples:
         
         # IRRELEVANT TOPICS - These should be rejected
         irrelevant_patterns = {
-            # Sports & Games
+            # Sports & Games (Cricket, Football, General)
             'sports': ['cricket', 'football', 'soccer', 'match', 'ipl', 'world cup', 'player', 
                       'team', 'score', 'goal', 'wicket', 'stadium', 'olympics', 'tennis',
-                      'ind vs', 'india vs', 'pakistan vs', 'match update', 'live score'],
+                      'ind vs', 'india vs', 'pakistan vs', 'match update', 'live score',
+                      'ball', 'bat', 'over', 'six', 'four', 'boundary', 'lbw', 'out', 'catch',
+                      'drs', 'review', 'umpire', 'captain', 'coach', 'tournament', 'series',
+                      'fifa', 'messi', 'ronaldo', 'virat', 'kohli', 'dhoni', 'rohit', 'game',
+                      'badminton', 'hockey', 'chess', 'bgmi', 'pubg', 'video game', 'kabaddi',
+                      'क्रिकेट', 'मैच', 'स्कोर', 'आईपीएल', 'खिलाड़ी', 'टीम', 'विकेट', 'छक्का', 'चौका',
+                      'डीआरएस', 'अंपायर', 'फुटबॉल', 'मेडल', 'ओलंपिक', 'बैडमिंटन', 'धोनी', 'कोहली'],
             
             # Politics & Current Affairs
             'politics': ['election', 'minister', 'president', 'prime minister', 'parliament',
                         'government', 'party', 'vote', 'donald trump', 'biden', 'modi',
-                        'congress', 'bjp', 'political', 'democracy'],
+                        'congress', 'bjp', 'political', 'democracy', 'neta', 'chunav', 'voting',
+                        'pm', 'cm', 'mla', 'mp', 'sansad', 'vidhan sabha', 'lok sabha', 'news',
+                        'चुनाव', 'नेता', 'मोदी', 'प्रधानमंत्री', 'सरकार', 'वोट', 'बीजेपी', 'कांग्रेस',
+                        'राजनीति', 'समाचार', 'खबर', 'न्यूज़'],
             
             # Entertainment & Celebrity
             'entertainment': ['movie', 'film', 'actor', 'actress', 'bollywood', 'hollywood',
-                            'tv show', 'series', 'netflix', 'celebrity', 'singer', 'song'],
+                            'tv show', 'series', 'netflix', 'celebrity', 'singer', 'song',
+                            'hero', 'heroine', 'star', 'release date', 'box office', 'hit', 'flop',
+                            'salman', 'shahrukh', 'amitabh', 'reels', 'instagram', 'tiktok',
+                            'youtube channel', 'subscriber', 'views', 'viral',
+                            'फिल्म', 'मूवी', 'हीरो', 'हीरोइन', 'सलमान', 'शाहरुख', 'गीत', 'गाना',
+                            'सीरियल', 'नेटफ्लिक्स', 'वायरल', 'वीडियो'],
             
             # Technology & Products (only product/tech questions, NOT social media life problems)
-            'technology': ['iphone', 'android', 'laptop', 'computer', 'software', 'app',
-                         'microsoft', 'apple inc', 'samsung'],
+            'technology': ['iphone', 'android', 'laptop', 'computer', 'software', 'app', 'website',
+                         'microsoft', 'apple inc', 'samsung', 'coding', 'programming', 
+                         'python code', 'java code', 'excel formula', 'python mein', 
+                         'code likho', 'sort list', 'loop in', 'function in',
+                         'github', 'repo', 'git', 'install', 'download', 'upload', 'server', 'database',
+                         'error', 'bug', 'fix', 'wifi', 'internet', 'mobile', 'phone', 'battery',
+                         'charger', 'sim', 'network', '4g', '5g', 'bluetooth', 'mouse', 'keyboard',
+                         'hack', 'password', 'login', 'signup', 'account', 'delete',
+                         'कंप्यूटर', 'लैपटॉप', 'मोबाइल', 'फ़ोन', 'चार्जर', 'इंटरनेट', 'वाईफाई',
+                         'ऐप', 'सॉफ्टवेयर', 'इंस्टॉल', 'डाउनलोड', 'हैकिंग', 'पासवर्ड', 'अकाउंट',
+                         'पायथन', 'जावा', 'कोडिंग', 'प्रोग्रामिंग', 'गिठूब', 'रेपो',
+                         'javascript', 'js', 'html', 'css', 'react', 'node', 'frontend', 'backend'],
             
-            # General Trivia
+            # Finance & Money (Investment, Banking)
+            'finance': ['stock market', 'share market', 'invest', 'investment', 'mutual fund',
+                       'crypto', 'bitcoin', 'ethereum', 'trading', 'profit', 'loss', 'bank',
+                       'account open', 'loan', 'credit card', 'debit card', 'interest rate',
+                       'tax', 'gst', 'salary', 'income', 'earning', 'money making', 'rich fast',
+                       'lottery', 'gambling', 'betting', 'paisa kaise', 'kamao', 'kamana',
+                       'gold', 'silver', 'price', 'rate', 'rupee', 'dollar', 'euro', 'double money', 'scheme',
+                       'शेयर बाजार', 'निवेश', 'बैंक', 'लोन', 'क्रेडिट कार्ड', 'सैलरी', 'कमाई',
+                       'पैसा कैसे', 'लॉटरी', 'सट्टा', 'बिटकॉइन', 'सोना', 'चांदी', 'भाव', 'कीमत'],
+
+            # General Trivia / Math / School / GK
             'trivia': ['capital of', 'largest', 'smallest', 'tallest', 'fastest',
                       'population', 'currency', 'flag', 'who invented', 'when was',
-                      'historical event', 'world war', 'discovery'],
+                      'historical event', 'world war', 'discovery', '2+2', 'calculate', 
+                      'solve x', 'math problem', 'kitna hota hai', 'plus', 'minus', 
+                      'multiply', 'divide', 'equation', 'formula', 'theorem', 'geometry',
+                      'algebra', 'trigonometry', 'physics', 'chemistry', 'biology', 'history',
+                      'geography quiz', 'general knowledge', 'gk question', 'who is', 'kon hai',
+                      'titanic', 'padosi', 'neighbor', 'joke', 'kahani', 'story', 'chutkula', 'lol', 'rofl',
+                      'tie a tie', 'height of', 'distance between', 'mount everest',
+                      'राजधानी', 'सबसे बड़ा', 'इतिहास', 'गणित', 'जोड़', 'घटाना', 'गुणा', 'भाग',
+                      'ज्यामिति', 'फॉर्मूला', 'सूत्र', 'पहेली', 'चुटकुला', 'कहानी', 'पड़ोसी', 'कौन है'],
             
             # Science (unless spiritual)
             'science': ['chemical formula', 'periodic table', 'molecule', 'bacteria',
-                       'virus covid', 'vaccine', 'dna', 'atom', 'neutron', 'electron'],
+                       'virus covid', 'vaccine', 'dna', 'atom', 'neutron', 'electron', 'gravity', 'physics',
+                       'solar system', 'planet', 'mars', 'moon distance', 'sun distance', 'earth',
+                       'evolution', 'big bang', 'black hole', 'nasa', 'isro', 'space', 'rocket',
+                       'photosynthesis', 'plant', 'animal',
+                       'विज्ञान', 'ग्रह', 'पृथ्वी', 'सूर्य', 'चांद', 'मंगल', 'अंतरिक्ष', 'रॉकेट',
+                       'परमाणु', 'अणु', 'वायरस', 'वैक्सीन', 'डीएनए', 'ग्रेविटी'],
             
-            # Food & Cooking (unless related to prasad/spiritual)
-            'food': ['recipe for', 'how to cook', 'ingredients for', 'restaurant',
-                    'pizza', 'burger', 'pasta', 'italian food'],
+            # Food & Cooking (STRICT REJECTION)
+            'food': ['recipe', 'how to cook', 'ingredients', 'restaurant',
+                    'pizza', 'burger', 'pasta', 'italian food', 'chai kaise', 'coffee kaise',
+                    'khana kaise', 'make tea', 'make coffee', 'biryani', 'maggie', 'paneer',
+                    'chicken', 'mutton', 'fish', 'egg', 'veg', 'non-veg', 'dish', 'swiggy', 'zomato',
+                    'samosa', 'cake', 'bread', 'roti', 'dal', 'sabji', 'breakfast', 'lunch', 'dinner',
+                    'रेसिपी', 'बनाए', 'खाना', 'रसोई', 'चाय', 'कॉफी', 'पिज़्ज़ा', 'बर्गर', 'पास्ता',
+                    'बिरयानी', 'पनीर', 'चिकन', 'मटन', 'अंडा', 'समोसा', 'केक', 'रोटी', 'सब्जी'],
             
             # Weather & Geography (factual)
-            'geography': ['weather today', 'temperature', 'forecast', 'rain tomorrow',
-                         'climate in', 'map of', 'distance between']
+            'geography': ['weather', 'temperature', 'forecast', 'rain tomorrow',
+                         'climate in', 'map of', 'distance between', 'mausam', 'barish', 'dhup',
+                         'garmi', 'sardi', 'thand', 'monsoon', 'humidity', 'degree celsius',
+                         'bus', 'train', 'flight', 'ticket', 'booking',
+                         'मौसम', 'बारिश', 'धूप', 'गर्मी', 'सर्दी', 'ठंड', 'तापमान', 'डिग्री',
+                         'मौसम', 'बारिश', 'धूप', 'गर्मी', 'सर्दी', 'ठंड', 'तापमान', 'डिग्री',
+                         'बस', 'ट्रेन', 'फ्लाइट', 'हवाई जहाज', 'टिकट', 'बुकिंग',
+                         # Unicode Matches (Guaranteed)
+                         '\u0915\u094d\u0930\u093f\u0915\u0947\u091f', # cricket
+                         '\u0921\u0940\u0906\u0930\u090f\u0938', # drs
+                         '\u0938\u092e\u094b\u0938\u093e', # samosa
+                         '\u092c\u0938']
         }
         
         # Check for irrelevant patterns
+        norm_query = unicodedata.normalize('NFKC', query).casefold()
+        
         for category, patterns in irrelevant_patterns.items():
             for pattern in patterns:
-                if pattern in query_lower:
+                nm_pat = unicodedata.normalize('NFKC', pattern).casefold()
+                if nm_pat in norm_query:
                     logger.warning(f"❌ Irrelevant query detected ({category}): '{query}'")
                     return False, f"""क्षमा करें, मैं श्री कृष्ण हूँ और केवल जीवन की समस्याओं, आध्यात्मिकता, और भगवद गीता के ज्ञान के बारे में मार्गदर्शन दे सकता हूँ।
 
@@ -709,19 +933,39 @@ Examples:
                  "llm_used": True
              }
 
-        # 0.5 Check if query is relevant to Krishna/Bhagavad Gita context
+        # 0.5 Check if query is relevant (Fast Regex Check)
         is_relevant, rejection_message = self._is_relevant_to_krishna(query)
         if not is_relevant:
-            logger.warning(f"Rejecting irrelevant query: '{query}'")
+            logger.warning(f"Rejecting irrelevant query (Regex): '{query}'")
             return {
                 "answer": rejection_message,
                 "shlokas": [],
                 "llm_used": False,
-                "rejected": True  # Flag to indicate query was rejected
+                "rejected": True
+            }
+
+        # 0.6 AI Understanding & Relevance Check (Smart Gatekeeper)
+        understanding = self._understand_query(query)
+        
+        if not understanding.get('is_relevant', True):
+            logger.warning(f"Rejecting irrelevant query (AI): '{query}'")
+            return {
+                "answer": """क्षमा करें, मैं श्री कृष्ण हूँ और केवल जीवन की समस्याओं, आध्यात्मिकता, और भगवद गीता के ज्ञान के बारे में मार्गदर्शन दे सकता हूँ।
+
+आप मुझसे पूछ सकते हैं:
+• जीवन की समस्याओं का समाधान (क्रोध, डर, चिंता, etc.)
+• कर्म, धर्म, और आत्मा के बारे में
+• रिश्तों और भावनाओं के बारे में
+• ध्यान, शांति, और आत्म-विकास के बारे में
+
+कृपया इन विषयों पर प्रश्न पूछें। 🙏""",
+                "shlokas": [],
+                "llm_used": False,
+                "rejected": True
             }
 
         # 1. Retrieve - Increased to 5 to give LLM better options
-        shlokas = self.search(query, top_k=5)
+        shlokas = self.search(query, top_k=5, understanding=understanding)
         
         # Log retrieved shlokas for debugging
         logger.info(f"📖 Retrieved {len(shlokas)} shlokas for query: '{query}'")

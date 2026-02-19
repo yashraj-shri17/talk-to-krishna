@@ -84,7 +84,6 @@ def _generate_audio_async(text: str) -> str:
 app = Flask(__name__)
 
 # CORS configuration for production
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -211,16 +210,7 @@ def ask_question():
                 if not any(qw in q_words for qw in q_words_set):
                     is_greeting = True
 
-        # DEBUG LOGGING
-        print(f"\n{'='*70}")
-        print(f"GREETING DETECTION DEBUG:")
-        print(f"Original query: '{question}'")
-        print(f"Cleaned: '{q_lower}'")
-        print(f"Words: {q_words}")
-        print(f"Is greeting: {is_greeting}")
-        print(f"User ID: {user_id}")
-        print(f"Session ID: {session_id}")
-        print(f"{'='*70}\n")
+
 
         if is_greeting:
             print(f"Greeting detected in API: {question}")
@@ -780,8 +770,7 @@ def forgot_password():
             
             return jsonify({
                 'success': True,
-                'message': 'If an account exists with this email, a reset link has been sent.',
-                'token': token  # REMOVE THIS IN PRODUCTION - only for testing
+                'message': 'If an account exists with this email, a reset link has been sent.'
             }), 200
         else:
             # Return same message to prevent email enumeration

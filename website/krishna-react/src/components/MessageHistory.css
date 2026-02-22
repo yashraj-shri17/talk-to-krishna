@@ -375,3 +375,11 @@
     background: rgba(251, 191, 36, 0.15);
     border-color: rgba(251, 191, 36, 0.3);
 }
+
+.speak-button.speaking {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.2);
+    border-color: rgba(251, 191, 36, 0.5);
+    box-shadow: 0 0 15px rgba(251, 191, 36, 0.2);
+    animation: pulse 2s infinite;
+}

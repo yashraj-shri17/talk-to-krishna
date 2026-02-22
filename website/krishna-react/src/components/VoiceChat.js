@@ -21,6 +21,7 @@ function VoiceChat() {
     const [showHistory, setShowHistory] = useState(false);
     const [transcript, setTranscript] = useState('');
     const [hasStarted, setHasStarted] = useState(false);
+    const [activeMessageId, setActiveMessageId] = useState(null);
     const recognitionRef = useRef(null);
     const currentUtteranceRef = useRef(null);
     const isCancelledRef = useRef(false);
@@ -33,11 +34,19 @@ function VoiceChat() {
         isCancelledRef.current = true; // Signal cancellation
         window.speechSynthesis.cancel();
         setIsSpeaking(false);
+        setActiveMessageId(null);
     }, []);
 
-    const speakText = useCallback((text) => {
+    const speakText = useCallback((text, messageId = null) => {
         if (!('speechSynthesis' in window)) {
             alert('Text-to-speech not supported in this browser.');
+            return;
+        }
+
+        // Toggle logic: If clicking the same message that's currently speaking, stop it.
+        // Also check window.speechSynthesis.speaking for browser-level state
+        if ((window.speechSynthesis.speaking || isSpeaking) && activeMessageId === messageId && messageId !== null) {
+            stopAudio();
             return;
         }
 
@@ -46,108 +55,110 @@ function VoiceChat() {
 
         // Cancel any ongoing speech explicitly
         window.speechSynthesis.cancel();
-        setIsSpeaking(true);
 
-        // Split text into manageable chunks (sentences)
-        const chunks = text.match(/[^.!?|]+[.!?|]*/g) || [text];
-        let currentChunkIndex = 0;
+        // Small delay to let the browser cleanup previous speech
+        setTimeout(() => {
+            if (isCancelledRef.current) return;
 
-        const speakNextChunk = () => {
-            // Check for cancellation signal
-            if (isCancelledRef.current) {
-                console.log("Audio stopped by user.");
-                setIsSpeaking(false);
-                return;
-            }
+            setIsSpeaking(true);
+            setActiveMessageId(messageId);
 
-            if (currentChunkIndex >= chunks.length) {
-                setIsSpeaking(false);
-                currentUtteranceRef.current = null;
-                return;
-            }
+            // Split text into manageable chunks (sentences)
+            const chunks = text.match(/[^.!?|]+[.!?|]*/g) || [text];
+            let currentChunkIndex = 0;
 
-            const chunkText = chunks[currentChunkIndex].trim();
-            if (!chunkText) {
-                currentChunkIndex++;
-                speakNextChunk();
-                return;
-            }
+            const speakNextChunk = () => {
+                // Check for cancellation signal
+                if (isCancelledRef.current) {
+                    console.log("Audio stopped by user.");
+                    setIsSpeaking(false);
+                    setActiveMessageId(null);
+                    return;
+                }
 
-            const utterance = new SpeechSynthesisUtterance(chunkText);
+                if (currentChunkIndex >= chunks.length) {
+                    setIsSpeaking(false);
+                    setActiveMessageId(null);
+                    currentUtteranceRef.current = null;
+                    return;
+                }
 
-            // Store reference
-            currentUtteranceRef.current = utterance;
+                const chunkText = chunks[currentChunkIndex].trim();
+                if (!chunkText) {
+                    currentChunkIndex++;
+                    speakNextChunk();
+                    return;
+                }
 
-            // Voice selection logic
-            const hasDevanagari = /[\u0900-\u097F]/.test(chunkText);
-            let voices = window.speechSynthesis.getVoices();
+                const utterance = new SpeechSynthesisUtterance(chunkText);
+                currentUtteranceRef.current = utterance;
 
-            if (voices.length === 0) {
-                voices = window.speechSynthesis.getVoices();
-            }
+                // Voice selection logic
+                const hasDevanagari = /[\u0900-\u097F]/.test(chunkText);
+                let voices = window.speechSynthesis.getVoices();
 
-            const findVoice = (lang, genderPreference) => {
-                return voices.find(voice =>
-                    voice.lang === lang &&
-                    voice.name.toLowerCase().includes(genderPreference)
-                );
+                if (voices.length === 0) {
+                    voices = window.speechSynthesis.getVoices();
+                }
+
+                const findVoice = (lang, genderPreference) => {
+                    return voices.find(voice =>
+                        voice.lang === lang &&
+                        voice.name.toLowerCase().includes(genderPreference)
+                    );
+                };
+
+                let preferredVoice = null;
+                if (hasDevanagari) {
+                    preferredVoice = voices.find(voice => voice.lang === 'sa-IN');
+                    if (!preferredVoice) preferredVoice = findVoice('hi-IN', 'male');
+                    if (!preferredVoice) preferredVoice = findVoice('hi-IN', 'hemant');
+                    if (!preferredVoice) preferredVoice = voices.find(voice => voice.lang === 'hi-IN');
+                    utterance.lang = preferredVoice ? preferredVoice.lang : 'hi-IN';
+                } else {
+                    preferredVoice = findVoice('en-IN', 'male');
+                    if (!preferredVoice) preferredVoice = findVoice('en-IN', 'ravi'); // Microsoft Ravi
+                    if (!preferredVoice) preferredVoice = voices.find(voice => voice.lang === 'en-IN');
+                    if (!preferredVoice) preferredVoice = findVoice('en-US', 'male');
+                    if (!preferredVoice) preferredVoice = findVoice('en-US', 'david'); // Microsoft David
+                    if (!preferredVoice) preferredVoice = voices.find(voice => voice.lang.startsWith('en'));
+                    utterance.lang = preferredVoice ? preferredVoice.lang : 'en-US';
+                }
+
+                if (preferredVoice) utterance.voice = preferredVoice;
+                utterance.rate = 0.9;
+                utterance.pitch = 0.8;
+
+                utterance.onend = () => {
+                    if (!isCancelledRef.current) {
+                        currentChunkIndex++;
+                        speakNextChunk();
+                    }
+                };
+
+                utterance.onerror = (event) => {
+                    console.error('Speech synthesis error', event);
+                    if (!isCancelledRef.current) {
+                        currentChunkIndex++;
+                        speakNextChunk();
+                    }
+                };
+
+                window.speechSynthesis.speak(utterance);
             };
 
-            let preferredVoice = null;
-            if (hasDevanagari) {
-                preferredVoice = voices.find(voice => voice.lang === 'sa-IN');
-                if (!preferredVoice) preferredVoice = findVoice('hi-IN', 'male');
-                if (!preferredVoice) preferredVoice = findVoice('hi-IN', 'hemant');
-                if (!preferredVoice) preferredVoice = voices.find(voice => voice.lang === 'hi-IN');
-                utterance.lang = preferredVoice ? preferredVoice.lang : 'hi-IN';
+            // Handle case where voices might not be loaded yet
+            if (window.speechSynthesis.getVoices().length === 0) {
+                window.speechSynthesis.onvoiceschanged = () => {
+                    speakNextChunk();
+                    window.speechSynthesis.onvoiceschanged = null;
+                };
             } else {
-                preferredVoice = findVoice('en-IN', 'male');
-                if (!preferredVoice) preferredVoice = findVoice('en-IN', 'ravi'); // Microsoft Ravi
-                if (!preferredVoice) preferredVoice = voices.find(voice => voice.lang === 'en-IN');
-                if (!preferredVoice) preferredVoice = findVoice('en-US', 'male');
-                if (!preferredVoice) preferredVoice = findVoice('en-US', 'david'); // Microsoft David
-                if (!preferredVoice) preferredVoice = voices.find(voice => voice.lang.startsWith('en'));
-                utterance.lang = preferredVoice ? preferredVoice.lang : 'en-US';
-            }
-
-            if (preferredVoice) {
-                utterance.voice = preferredVoice;
-            }
-
-            utterance.rate = 0.9;
-            utterance.pitch = 0.8;
-
-            utterance.onend = () => {
-                // Only proceed if not cancelled
-                if (!isCancelledRef.current) {
-                    currentChunkIndex++;
-                    speakNextChunk();
-                }
-            };
-
-            utterance.onerror = (event) => {
-                console.error('Speech synthesis error', event);
-                // On error, if not cancelled, try to skip
-                if (!isCancelledRef.current) {
-                    currentChunkIndex++;
-                    speakNextChunk();
-                }
-            };
-
-            window.speechSynthesis.speak(utterance);
-        };
-
-        // Handle case where voices might not be loaded yet
-        if (window.speechSynthesis.getVoices().length === 0) {
-            window.speechSynthesis.onvoiceschanged = () => {
                 speakNextChunk();
-                window.speechSynthesis.onvoiceschanged = null;
-            };
-        } else {
-            speakNextChunk();
-        }
+            }
+        }, 50);
 
-    }, []);
+    }, [stopAudio, isSpeaking, activeMessageId]);
 
 
 
@@ -170,22 +181,21 @@ function VoiceChat() {
         try {
             const startTime = performance.now();
 
-            // Request text only (disable backend audio generation)
-            // Include user_id for conversation history
             const response = await axios.post(API_URL, {
                 question: text,
                 include_audio: false,
-                session_id: sessionId, // Pass session ID for fresh context
-                user_id: user?.id  // Send user ID if logged in
+                session_id: sessionId,
+                user_id: user?.id
             }, {
-                timeout: 60000  // 60s — allows Render free tier to wake from sleep
+                timeout: 60000
             });
 
             const textTime = performance.now() - startTime;
             console.log(`⏱️ Text response received in ${textTime.toFixed(0)}ms`);
 
+            const krishnaMessageId = Date.now() + 1;
             const krishnaMessage = {
-                id: Date.now() + 1,
+                id: krishnaMessageId,
                 type: 'krishna',
                 text: response.data.answer || 'क्षमा करें, मैं अभी उत्तर देने में असमर्थ हूँ।',
                 timestamp: new Date()
@@ -193,14 +203,15 @@ function VoiceChat() {
 
             setMessages(prev => [...prev, krishnaMessage]);
 
-            // Speak the response using browser TTS
-            speakText(krishnaMessage.text);
+            // Speak the response using browser TTS and mark as active
+            speakText(krishnaMessage.text, krishnaMessageId);
 
         } catch (error) {
             console.error('Error:', error);
             const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+            const errorMsgId = Date.now() + 1;
             const errorMsg = {
-                id: Date.now() + 1,
+                id: errorMsgId,
                 type: 'krishna',
                 text: isTimeout
                     ? 'सर्वर जाग रहा है, कृपया 30 सेकंड बाद पुनः प्रयास करें। 🙏'
@@ -208,11 +219,11 @@ function VoiceChat() {
                 timestamp: new Date()
             };
             setMessages(prev => [...prev, errorMsg]);
-            speakText(errorMsg.text);
+            speakText(errorMsg.text, errorMsgId);
         } finally {
             setIsLoading(false);
         }
-    }, [speakText, user]);
+    }, [speakText, user, sessionId]);
 
     useEffect(() => {
         // Initialize Speech Recognition
@@ -249,13 +260,14 @@ function VoiceChat() {
         const timer = setTimeout(() => {
             setMessages(prev => {
                 if (prev.length === 0) {
+                    const welcomeMsgId = Date.now();
                     const welcomeMsg = {
-                        id: Date.now(),
+                        id: welcomeMsgId,
                         type: 'krishna',
                         text: 'नमस्ते! मैं कृष्ण हूँ। मुझसे कुछ भी पूछें।',
                         timestamp: new Date()
                     };
-                    speakText(welcomeMsg.text);
+                    speakText(welcomeMsg.text, welcomeMsgId);
                     return [welcomeMsg];
                 }
                 return prev;
@@ -263,7 +275,7 @@ function VoiceChat() {
         }, 1500);
 
         return () => clearTimeout(timer);
-    }, [handleVoiceInput, speakText]);
+    }, [handleVoiceInput, speakText, sessionId]);
 
     // Cleanup audio when component unmounts or route changes
     useEffect(() => {
@@ -417,6 +429,7 @@ function VoiceChat() {
                 messages={messages}
                 isOpen={showHistory}
                 onSpeak={speakText}
+                activeMessageId={activeMessageId}
                 onClose={() => {
                     // Stop audio when closing history
                     if (isSpeaking) {

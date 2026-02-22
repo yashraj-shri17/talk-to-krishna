@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import './MessageHistory.css';
 
-function MessageHistory({ messages, isOpen, onClose, onClearHistory, onSpeak }) {
+function MessageHistory({ messages, isOpen, onClose, onClearHistory, onSpeak, activeMessageId }) {
     const [showConfirmDialog, setShowConfirmDialog] = useState(false);
 
     const formatMessage = (text) => {
@@ -90,18 +90,24 @@ function MessageHistory({ messages, isOpen, onClose, onClearHistory, onSpeak }) 
                                         </span>
                                         {message.type === 'krishna' && (
                                             <button
-                                                className="speak-button"
+                                                className={`speak-button ${activeMessageId === message.id ? 'speaking' : ''}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    onSpeak(message.text);
+                                                    onSpeak(message.text, message.id);
                                                 }}
-                                                title="Read aloud"
+                                                title={activeMessageId === message.id ? "Stop reading" : "Read aloud"}
                                             >
-                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                    <path d="M11 5L6 9H2V15H6L11 19V5Z" fill="currentColor" />
-                                                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                                                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                                                </svg>
+                                                {activeMessageId === message.id ? (
+                                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                        <rect x="6" y="6" width="12" height="12" />
+                                                    </svg>
+                                                ) : (
+                                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                        <path d="M11 5L6 9H2V15H6L11 19V5Z" fill="currentColor" />
+                                                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                                                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                                                    </svg>
+                                                )}
                                             </button>
                                         )}
                                     </div>

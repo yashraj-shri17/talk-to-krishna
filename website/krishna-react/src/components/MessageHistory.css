@@ -354,22 +354,24 @@
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
 }
+
 .speak-button {
-    background: none;
-    border: none;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     cursor: pointer;
-    font-size: 1.1rem;
-    padding: 4px 8px;
-    border-radius: 20px;
+    padding: 6px;
+    border-radius: 8px;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.4);
+    color: rgba(255, 255, 255, 0.6);
+    margin-left: 4px;
 }
 
 .speak-button:hover {
-    transform: scale(1.1);
+    transform: scale(1.05);
     color: #fbbf24;
-    background: rgba(251, 191, 36, 0.1);
+    background: rgba(251, 191, 36, 0.15);
+    border-color: rgba(251, 191, 36, 0.3);
 }

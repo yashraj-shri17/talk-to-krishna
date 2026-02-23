@@ -234,12 +234,11 @@ Examples:
 - "Aaj weather kaisa hai?" -> {{ "rewritten_query": "Weather forecast", "emotional_state": "neutral", "keywords": "weather", "is_relevant": false }}
 - "Python mein list sort kaise kare?" -> {{ "rewritten_query": "Python coding help", "emotional_state": "neutral", "keywords": "coding", "is_relevant": false }}
 - "Mummy papa shaadi ke liye nahi maan rahe" -> {{ "rewritten_query": "My parents are not approving my marriage choice, causing family conflict.", "emotional_state": "distress", "keywords": "family duty love conflict", "is_relevant": true }}
-- "Mummy papa shaadi ke liye nahi maan rahe" -> {{ "rewritten_query": "My parents are not approving my marriage choice, causing family conflict.", "emotional_state": "distress", "keywords": "family duty love conflict", "is_relevant": true }}
 - "Man bahut pareshan hai" -> {{ "rewritten_query": "My mind is very restless and I seek peace.", "emotional_state": "confused", "keywords": "mind peace focus", "is_relevant": true }}"""
 
             resp = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
+                model=settings.LLM_CLASSIFIER_MODEL,
                 max_tokens=150,
                 temperature=0.0,
                 stream=False,
@@ -508,7 +507,7 @@ Example: ["2.47", "18.66"]"""
             
             resp = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
+                model=settings.LLM_CLASSIFIER_MODEL,
                 max_tokens=200,
                 temperature=0.0,
                 response_format={"type": "json_object"}
@@ -841,7 +840,9 @@ Example: ["2.47", "18.66"]"""
         for category, patterns in irrelevant_patterns.items():
             for pattern in patterns:
                 nm_pat = unicodedata.normalize('NFKC', pattern).casefold()
-                if nm_pat in norm_query:
+                # Use word boundaries to avoid substring matches (e.g., 'match' in 'attachment')
+                # For Devanagari, we use a simple boundary check
+                if re.search(rf'\b{re.escape(nm_pat)}\b', norm_query) or nm_pat in norm_query.split():
                     logger.warning(f"❌ Irrelevant query detected ({category}): '{query}'")
                     return False, f"""क्षमा करें, मैं श्री कृष्ण हूँ और केवल जीवन की समस्याओं, आध्यात्मिकता, और भगवद गीता के ज्ञान के बारे में मार्गदर्शन दे सकता हूँ।
 
@@ -975,8 +976,25 @@ Example: ["2.47", "18.66"]"""
         # 2. Generate with conversation context
         if not self.llm_generator:
              return {"answer": "LLM not connected.", "shlokas": shlokas, "llm_used": False}
+        
+        # Map emotional state to tone to save one LLM call
+        emotional_state = understanding.get('emotional_state', 'neutral')
+        tone_map = {
+            'crisis': 'crisis',
+            'distress': 'distress',
+            'depressive': 'distress',
+            'angry': 'distress',
+            'fear': 'distress',
+            'confused': 'distress'
+        }
+        tone = tone_map.get(emotional_state, 'general')
              
-        return self.llm_generator.generate_answer(query, shlokas, conversation_history=conversation_history or [])
+        return self.llm_generator.generate_answer(
+            query, 
+            shlokas, 
+            conversation_history=conversation_history or [],
+            tone=tone
+        )
 
     # Legacy wrappers for compatibility
     def _get_llm_generator(self):

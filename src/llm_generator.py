@@ -72,7 +72,7 @@ Reply with only: crisis OR distress OR general"""
 
             response = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": classification_prompt}],
-                model=self.model,
+                model=settings.LLM_CLASSIFIER_MODEL,
                 max_tokens=5,
                 temperature=0.0,  # Deterministic
                 stream=False
@@ -241,15 +241,17 @@ Give a direct, practical answer based on the Gita."""
         user_question: str,
         retrieved_shlokas: List[Dict[str, Any]],
         conversation_history: List[Dict[str, Any]] = None,
-        stream: bool = True
+        stream: bool = True,
+        tone: Optional[QueryTone] = None
     ) -> Dict[str, Any]:
 
         if not self.is_available():
             return {'answer': None, 'shlokas': retrieved_shlokas, 'llm_used': False}
 
         try:
-            # Step 1: Classify emotional gravity
-            tone = self.classify_query(user_question)
+            # Step 1: Use provided tone or classify emotional gravity
+            if not tone:
+                tone = self.classify_query(user_question)
 
             # Step 2: Build shloka options (Sanskrit + English meaning for LLM)
             history_context = self.format_conversation_history(conversation_history or [])

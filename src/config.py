@@ -27,7 +27,8 @@ class Settings(BaseSettings):
     # Model configuration
     SENTENCE_TRANSFORMER_MODEL: str = "BAAI/bge-small-en-v1.5"  # Switched to Small model for Render compatibility (512MB RAM)
     EMBEDDING_BATCH_SIZE: int = 32
-    LLM_MODEL: str = "llama-3.3-70b-versatile"  # Upgraded for better reasoning
+    LLM_MODEL: str = "llama-3.3-70b-versatile"  # High quality for answers
+    LLM_CLASSIFIER_MODEL: str = "llama-3.1-8b-instant"  # Fast and high rate-limits for gatekeeping
     
     # Search configuration
     DEFAULT_TOP_K: int = 10
